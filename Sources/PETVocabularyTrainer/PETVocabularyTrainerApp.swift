@@ -292,33 +292,65 @@ struct DashboardView: View {
                     )
                 }
 
-                if let estimate = model.latestPlacementEstimate {
+                if let plan = model.latestPlacementStudyPlan {
                     SurfaceCard(title: "Latest Placement Estimate") {
-                        HStack(alignment: .top, spacing: 24) {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("Estimated PET-style vocabulary")
-                                    .font(.system(size: 18, weight: .bold, design: .default))
-                                    .foregroundStyle(AppPalette.muted)
-                                Text("\(estimate.estimatedVocabularySize) / \(estimate.benchmarkVocabularySize)")
-                                    .font(.system(size: 56, weight: .bold, design: .serif))
-                                    .foregroundStyle(AppPalette.ink)
-                                Text(estimate.guidance)
-                                    .font(.system(size: 20, weight: .medium, design: .default))
-                                    .foregroundStyle(AppPalette.muted)
-                            }
-
-                            Spacer()
-
-                            VStack(alignment: .trailing, spacing: 10) {
-                                PillLabel(text: estimate.placementBand.uppercased(), tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
-                                if let summary = model.latestPlacementSummary {
-                                    Text("From \(summary.correctAnswers) / \(summary.totalQuestions) on your latest 100-word placement")
-                                        .font(.system(size: 16, weight: .medium, design: .default))
+                        VStack(alignment: .leading, spacing: 18) {
+                            HStack(alignment: .top, spacing: 24) {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Estimated PET-style vocabulary")
+                                        .font(.system(size: 18, weight: .bold, design: .default))
                                         .foregroundStyle(AppPalette.muted)
-                                        .multilineTextAlignment(.trailing)
-                                        .frame(maxWidth: 280, alignment: .trailing)
+                                    Text("\(plan.estimate.estimatedVocabularySize) / \(plan.estimate.benchmarkVocabularySize)")
+                                        .font(.system(size: 56, weight: .bold, design: .serif))
+                                        .foregroundStyle(AppPalette.ink)
+                                    Text(plan.estimate.guidance)
+                                        .font(.system(size: 20, weight: .medium, design: .default))
+                                        .foregroundStyle(AppPalette.muted)
+                                }
+
+                                Spacer()
+
+                                VStack(alignment: .trailing, spacing: 10) {
+                                    PillLabel(text: plan.estimate.placementBand.uppercased(), tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
+                                    if let summary = model.latestPlacementSummary {
+                                        Text("From \(summary.correctAnswers) / \(summary.totalQuestions) on your latest 100-word placement")
+                                            .font(.system(size: 16, weight: .medium, design: .default))
+                                            .foregroundStyle(AppPalette.muted)
+                                            .multilineTextAlignment(.trailing)
+                                            .frame(maxWidth: 280, alignment: .trailing)
+                                    }
                                 }
                             }
+
+                            HStack(spacing: 16) {
+                                MetricTile(
+                                    title: "To 3,000",
+                                    value: "\(plan.estimate.remainingToBenchmark)",
+                                    caption: "Words still needed to reach the PET benchmark",
+                                    tint: AppPalette.terracotta
+                                )
+                                MetricTile(
+                                    title: "7-day target",
+                                    value: "\(plan.estimate.weeklyGoalWords)",
+                                    caption: "\(plan.estimate.dailyGoalWords) words a day this week",
+                                    tint: AppPalette.olive
+                                )
+                            }
+
+                            if !plan.focusTopics.isEmpty {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Weakest topics")
+                                        .font(.system(size: 18, weight: .bold, design: .default))
+                                        .foregroundStyle(AppPalette.muted)
+                                    HStack(spacing: 10) {
+                                        ForEach(plan.focusTopics, id: \.self) { topic in
+                                            TopicChip(topic: topic)
+                                        }
+                                    }
+                                }
+                            }
+
+                            PlacementActionList(actions: plan.nextWeekActions)
                         }
                     }
                 }
@@ -490,8 +522,8 @@ struct SummaryView: View {
 
     var body: some View {
         let summary = model.latestSummary
-        let placementEstimate = summary?.mode == .placement
-            ? summary.map { PlacementEstimator.estimate(correctAnswers: $0.correctAnswers, totalQuestions: $0.totalQuestions) }
+        let placementPlan = summary?.mode == .placement
+            ? summary.map { PlacementPlanner.plan(correctAnswers: $0.correctAnswers, totalQuestions: $0.totalQuestions, weakTopics: $0.weakTopics) }
             : nil
 
         ScrollView {
@@ -510,33 +542,65 @@ struct SummaryView: View {
                     }
                 }
 
-                if let placementEstimate {
+                if let placementPlan {
                     SurfaceCard(title: "Placement Result") {
-                        HStack(alignment: .top, spacing: 24) {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("Estimated PET-style vocabulary")
-                                    .font(.system(size: 18, weight: .bold, design: .default))
-                                    .foregroundStyle(AppPalette.muted)
-                                Text("\(placementEstimate.estimatedVocabularySize) / \(placementEstimate.benchmarkVocabularySize)")
-                                    .font(.system(size: 70, weight: .bold, design: .serif))
-                                    .foregroundStyle(AppPalette.ink)
-                                Text(placementEstimate.guidance)
-                                    .font(.system(size: 22, weight: .medium, design: .default))
-                                    .foregroundStyle(AppPalette.muted)
+                        VStack(alignment: .leading, spacing: 18) {
+                            HStack(alignment: .top, spacing: 24) {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Estimated PET-style vocabulary")
+                                        .font(.system(size: 18, weight: .bold, design: .default))
+                                        .foregroundStyle(AppPalette.muted)
+                                    Text("\(placementPlan.estimate.estimatedVocabularySize) / \(placementPlan.estimate.benchmarkVocabularySize)")
+                                        .font(.system(size: 70, weight: .bold, design: .serif))
+                                        .foregroundStyle(AppPalette.ink)
+                                    Text(placementPlan.estimate.guidance)
+                                        .font(.system(size: 22, weight: .medium, design: .default))
+                                        .foregroundStyle(AppPalette.muted)
+                                }
+
+                                Spacer()
+
+                                VStack(alignment: .trailing, spacing: 14) {
+                                    PillLabel(text: placementPlan.estimate.placementBand.uppercased(), tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
+                                    MetricTile(
+                                        title: "Benchmark",
+                                        value: "3,000",
+                                        caption: "PET-style words in this estimate range",
+                                        tint: AppPalette.olive
+                                    )
+                                    .frame(width: 250)
+                                }
                             }
 
-                            Spacer()
-
-                            VStack(alignment: .trailing, spacing: 14) {
-                                PillLabel(text: placementEstimate.placementBand.uppercased(), tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
+                            HStack(spacing: 16) {
                                 MetricTile(
-                                    title: "Benchmark",
-                                    value: "3,000",
-                                    caption: "PET-style words in this estimate range",
-                                    tint: AppPalette.olive
+                                    title: "To 3,000",
+                                    value: "\(placementPlan.estimate.remainingToBenchmark)",
+                                    caption: "Words still needed to reach the benchmark",
+                                    tint: AppPalette.terracotta
                                 )
-                                .frame(width: 250)
+                                MetricTile(
+                                    title: "7-day target",
+                                    value: "\(placementPlan.estimate.weeklyGoalWords)",
+                                    caption: "\(placementPlan.estimate.dailyGoalWords) words per day",
+                                    tint: AppPalette.blue
+                                )
                             }
+
+                            if !placementPlan.focusTopics.isEmpty {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Weakest topics from the placement")
+                                        .font(.system(size: 18, weight: .bold, design: .default))
+                                        .foregroundStyle(AppPalette.muted)
+                                    HStack(spacing: 10) {
+                                        ForEach(placementPlan.focusTopics, id: \.self) { topic in
+                                            TopicChip(topic: topic)
+                                        }
+                                    }
+                                }
+                            }
+
+                            PlacementActionList(actions: placementPlan.nextWeekActions)
                         }
                     }
                 }
@@ -839,6 +903,43 @@ struct TopicChip: View {
             .foregroundStyle(AppPalette.blue)
             .background(AppPalette.blueSoft)
             .clipShape(Capsule())
+    }
+}
+
+struct PlacementActionList: View {
+    let actions: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Next 7-day study plan")
+                .font(.system(size: 18, weight: .bold, design: .default))
+                .foregroundStyle(AppPalette.muted)
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(actions.enumerated()), id: \.offset) { index, action in
+                    HStack(alignment: .top, spacing: 12) {
+                        Text("\(index + 1)")
+                            .font(.system(size: 16, weight: .bold, design: .default))
+                            .foregroundStyle(AppPalette.terracotta)
+                            .frame(width: 24, alignment: .leading)
+                        Text(action)
+                            .font(.system(size: 18, weight: .medium, design: .default))
+                            .foregroundStyle(AppPalette.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.72))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(AppPalette.border, lineWidth: 1.1)
+        )
     }
 }
 

@@ -125,12 +125,13 @@ enum FeedbackGenerator {
             .map(\.key)
 
         if session.mode == .placement {
-            let estimate = PlacementEstimator.estimate(
+            let studyPlan = PlacementPlanner.plan(
                 correctAnswers: session.correctAnswers,
-                totalQuestions: session.questions.count
+                totalQuestions: session.questions.count,
+                weakTopics: Array(weakTopics.prefix(3))
             )
-            let weakTopicText = weakTopics.first?.displayName.lowercased() ?? "mixed PET topics"
-            let body = "You answered \(session.correctAnswers) of \(session.questions.count) correctly. Your estimated PET-style vocabulary is about \(estimate.estimatedVocabularySize) words out of a 3,000-word benchmark. \(estimate.guidance)"
+            let weakTopicText = studyPlan.focusTopics.first?.displayName.lowercased() ?? "mixed PET topics"
+            let body = "You answered \(session.correctAnswers) of \(session.questions.count) correctly. Your estimated PET-style vocabulary is about \(studyPlan.estimate.estimatedVocabularySize) words out of a 3,000-word benchmark. \(studyPlan.estimate.guidance)"
 
             return FeedbackSummary(
                 headline: "Placement complete",
@@ -191,33 +192,72 @@ enum PlacementEstimator {
         let ratio = max(0, min(Double(correctAnswers) / Double(max(totalQuestions, 1)), 1.0))
         let rawEstimate = Int((ratio * Double(benchmarkVocabularySize)).rounded())
         let roundedEstimate = Int((Double(rawEstimate) / 50.0).rounded() * 50.0)
+        let remainingToBenchmark = max(0, benchmarkVocabularySize - roundedEstimate)
 
         let placementBand: String
         let guidance: String
+        let dailyGoalWords: Int
 
         switch roundedEstimate {
         case ..<1_200:
             placementBand = "Foundation Builder"
             guidance = "Focus on high-frequency review first and use daily missions to build your base."
+            dailyGoalWords = 18
         case ..<1_800:
             placementBand = "Emerging PET"
             guidance = "You already have a base. Daily missions should grow this quickly, especially on missed words."
+            dailyGoalWords = 16
         case ..<2_400:
             placementBand = "PET Developing"
             guidance = "You are entering a strong PET range. Keep pushing weak topics and failed-word review."
+            dailyGoalWords = 14
         case ..<2_800:
             placementBand = "PET Strong"
             guidance = "You already know a solid PET-style core. Now focus on accuracy and finishing weaker topic groups."
+            dailyGoalWords = 10
         default:
             placementBand = "PET Ready"
             guidance = "You are performing near the top of this 3,000-word benchmark. Use missions to sharpen consistency."
+            dailyGoalWords = 8
         }
+
+        let weeklyGoalWords = min(max(dailyGoalWords * 7, dailyGoalWords), max(remainingToBenchmark, dailyGoalWords))
 
         return PlacementEstimate(
             estimatedVocabularySize: roundedEstimate,
             benchmarkVocabularySize: benchmarkVocabularySize,
+            remainingToBenchmark: remainingToBenchmark,
             placementBand: placementBand,
-            guidance: guidance
+            guidance: guidance,
+            dailyGoalWords: dailyGoalWords,
+            weeklyGoalWords: weeklyGoalWords
+        )
+    }
+}
+
+enum PlacementPlanner {
+    static func plan(correctAnswers: Int, totalQuestions: Int, weakTopics: [WordTopic]) -> PlacementStudyPlan {
+        let estimate = PlacementEstimator.estimate(correctAnswers: correctAnswers, totalQuestions: totalQuestions)
+        let focusTopics = Array(weakTopics.prefix(3))
+        let focusTopicText: String
+        if focusTopics.isEmpty {
+            focusTopicText = "mixed PET topics"
+        } else if focusTopics.count == 1 {
+            focusTopicText = focusTopics[0].displayName.lowercased()
+        } else {
+            focusTopicText = focusTopics.map { $0.displayName.lowercased() }.joined(separator: ", ")
+        }
+
+        let nextWeekActions = [
+            "Target about \(estimate.dailyGoalWords) words per day for the next 7 days.",
+            "Use review missions to close the remaining \(estimate.remainingToBenchmark) words toward the 3,000-word PET benchmark.",
+            "Spend extra time on \(focusTopicText) because those were your weakest topics in the placement test."
+        ]
+
+        return PlacementStudyPlan(
+            estimate: estimate,
+            focusTopics: focusTopics,
+            nextWeekActions: nextWeekActions
         )
     }
 }

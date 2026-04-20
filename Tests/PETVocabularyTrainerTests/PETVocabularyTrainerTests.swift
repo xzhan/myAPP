@@ -8,7 +8,23 @@ struct PETVocabularyTrainerTests {
 
         #expect(estimate.estimatedVocabularySize == 2_400)
         #expect(estimate.benchmarkVocabularySize == 3_000)
+        #expect(estimate.remainingToBenchmark == 600)
         #expect(estimate.placementBand == "PET Strong")
+        #expect(estimate.weeklyGoalWords == 70)
+    }
+
+    @Test func placementPlannerBuildsNextWeekStudyPlanFromWeakTopics() {
+        let plan = PlacementPlanner.plan(
+            correctAnswers: 60,
+            totalQuestions: 100,
+            weakTopics: [.travel, .school]
+        )
+
+        #expect(plan.estimate.estimatedVocabularySize == 1_800)
+        #expect(plan.focusTopics == [.travel, .school])
+        #expect(plan.nextWeekActions.count == 3)
+        #expect(plan.nextWeekActions[1].contains("1200"))
+        #expect(plan.nextWeekActions[2].contains("travel, school"))
     }
 
     @MainActor

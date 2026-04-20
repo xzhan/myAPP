@@ -131,6 +131,15 @@ final class AppModel {
         )
     }
 
+    var latestPlacementStudyPlan: PlacementStudyPlan? {
+        guard let summary = latestPlacementSummary else { return nil }
+        return PlacementPlanner.plan(
+            correctAnswers: summary.correctAnswers,
+            totalQuestions: summary.totalQuestions,
+            weakTopics: summary.weakTopics
+        )
+    }
+
     var reviewWords: [(word: VocabularyWord, progress: WordProgress)] {
         words.compactMap { word in
             guard let progress = data.progressByWordID[word.id], progress.reviewPriority > 0 else {

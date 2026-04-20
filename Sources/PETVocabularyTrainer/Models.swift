@@ -240,8 +240,17 @@ struct DashboardStats: Hashable {
 struct PlacementEstimate: Hashable {
     let estimatedVocabularySize: Int
     let benchmarkVocabularySize: Int
+    let remainingToBenchmark: Int
     let placementBand: String
     let guidance: String
+    let dailyGoalWords: Int
+    let weeklyGoalWords: Int
+}
+
+struct PlacementStudyPlan: Hashable {
+    let estimate: PlacementEstimate
+    let focusTopics: [WordTopic]
+    let nextWeekActions: [String]
 }
 
 struct QuizAnswerFeedback: Hashable {
