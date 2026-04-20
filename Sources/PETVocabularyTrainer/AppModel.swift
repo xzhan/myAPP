@@ -150,6 +150,17 @@ final class AppModel {
         )
     }
 
+    var resumeSessionTitle: String {
+        guard let session = currentSession else {
+            return "RESUME SESSION"
+        }
+        return "RESUME \(session.mode.title.uppercased())"
+    }
+
+    var quizExitTitle: String {
+        data.hasCompletedPlacement ? "BACK TO DASHBOARD" : "BACK TO MAIN"
+    }
+
     var wordBankSnapshot: WordBankSnapshot {
         if let importedLibrary = data.importedLibrary {
             return WordBankSnapshot(
@@ -254,6 +265,24 @@ final class AppModel {
     func openHistory() {
         cancelAutoAdvance()
         screen = .history
+    }
+
+    func resumeCurrentSession() {
+        guard data.activeSession != nil else { return }
+        cancelAutoAdvance()
+        answerFeedback = nil
+        screen = .quiz
+    }
+
+    func leaveQuiz() {
+        cancelAutoAdvance()
+
+        if completePendingAnswerIfNeeded() {
+            return
+        }
+
+        screen = data.hasCompletedPlacement ? .dashboard : .onboarding
+        try? persist()
     }
 
     func requestVocabularyImport() {
@@ -452,6 +481,24 @@ final class AppModel {
         for word in words where data.progressByWordID[word.id] == nil {
             data.progressByWordID[word.id] = .fresh(for: word.id)
         }
+    }
+
+    private func completePendingAnswerIfNeeded() -> Bool {
+        guard answerFeedback != nil, var session = data.activeSession else {
+            answerFeedback = nil
+            return false
+        }
+
+        answerFeedback = nil
+        session.currentIndex += 1
+
+        if session.currentIndex >= session.questions.count {
+            finish(session: session)
+            return true
+        }
+
+        data.activeSession = session
+        return false
     }
 
     private func importVocabulary(from url: URL) {

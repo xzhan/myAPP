@@ -112,6 +112,7 @@ struct OnboardingView: View {
         let hasPlacement = model.data.hasCompletedPlacement
         let primaryTitle = hasPlacement ? "DAILY CHALLENGE" : "100-WORD TEST"
         let secondaryTitle = hasPlacement ? "100-WORD TEST" : "DAILY CHALLENGE"
+        let hasPausedSession = model.currentSession != nil
 
         HStack(alignment: .top, spacing: 32) {
             VStack(alignment: .leading, spacing: 28) {
@@ -143,6 +144,14 @@ struct OnboardingView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 18) {
+                    if hasPausedSession {
+                        Button(model.resumeSessionTitle) {
+                            model.resumeCurrentSession()
+                        }
+                        .buttonStyle(HeroButtonStyle(kind: .filled))
+                        .frame(maxWidth: 560)
+                    }
+
                     Button(primaryTitle) {
                         if hasPlacement {
                             model.startMission()
@@ -150,7 +159,7 @@ struct OnboardingView: View {
                             model.startPlacement()
                         }
                     }
-                    .buttonStyle(HeroButtonStyle(kind: .filled))
+                    .buttonStyle(HeroButtonStyle(kind: hasPausedSession ? .outlined : .filled))
                     .frame(maxWidth: 520)
 
                     Button {
@@ -164,6 +173,13 @@ struct OnboardingView: View {
                     }
                     .buttonStyle(HeroButtonStyle(kind: .outlined))
                     .frame(maxWidth: 560)
+                }
+
+                if hasPausedSession {
+                    Text("Your current session is saved locally. You can leave and come back without losing progress.")
+                        .font(.system(size: 19, weight: .medium, design: .default))
+                        .foregroundStyle(AppPalette.terracotta)
+                        .frame(maxWidth: 760, alignment: .leading)
                 }
 
                 WordBankCard(
@@ -220,6 +236,7 @@ struct DashboardView: View {
 
     var body: some View {
         let stats = model.dashboardStats
+        let hasPausedSession = model.currentSession != nil
 
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
@@ -242,8 +259,16 @@ struct DashboardView: View {
                             .frame(maxWidth: 760, alignment: .leading)
 
                         VStack(alignment: .leading, spacing: 16) {
-                            Button("DAILY CHALLENGE") { model.startMission() }
+                            if hasPausedSession {
+                                Button(model.resumeSessionTitle) {
+                                    model.resumeCurrentSession()
+                                }
                                 .buttonStyle(HeroButtonStyle(kind: .filled))
+                                .frame(maxWidth: 500)
+                            }
+
+                            Button("DAILY CHALLENGE") { model.startMission() }
+                                .buttonStyle(HeroButtonStyle(kind: hasPausedSession ? .outlined : .filled))
                                 .frame(maxWidth: 460)
 
                             Button {
@@ -253,6 +278,13 @@ struct DashboardView: View {
                             }
                             .buttonStyle(HeroButtonStyle(kind: .outlined))
                             .frame(maxWidth: 500)
+                        }
+
+                        if hasPausedSession {
+                            Text("Current session progress is saved. Resume it now, or start a new mission when you are ready.")
+                                .font(.system(size: 18, weight: .medium, design: .default))
+                                .foregroundStyle(AppPalette.terracotta)
+                                .frame(maxWidth: 760, alignment: .leading)
                         }
 
                         HStack(spacing: 12) {
@@ -514,7 +546,12 @@ struct QuizView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    HStack {
+                    HStack(alignment: .center, spacing: 14) {
+                        Button(model.quizExitTitle) {
+                            model.leaveQuiz()
+                        }
+                        .buttonStyle(SecondaryNavButtonStyle())
+
                         Text("QUESTION \(model.currentQuestionNumber) / \(session.questions.count)")
                             .font(.system(size: 22, weight: .bold, design: .default))
                             .tracking(1.2)
