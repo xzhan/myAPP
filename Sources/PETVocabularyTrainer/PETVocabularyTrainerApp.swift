@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum AppPalette {
     static let window = Color(red: 0.93, green: 0.93, blue: 0.91)
@@ -62,6 +63,15 @@ struct RootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(model.errorMessage ?? "")
+        }
+        .fileImporter(
+            isPresented: Binding(
+                get: { model.isShowingLibraryImporter },
+                set: { model.isShowingLibraryImporter = $0 }
+            ),
+            allowedContentTypes: [.pdf, .json, .commaSeparatedText, .plainText]
+        ) { result in
+            model.handleVocabularyImportSelection(result)
         }
     }
 
@@ -155,6 +165,13 @@ struct OnboardingView: View {
                     .buttonStyle(HeroButtonStyle(kind: .outlined))
                     .frame(maxWidth: 560)
                 }
+
+                WordBankCard(
+                    snapshot: model.wordBankSnapshot,
+                    onImport: { model.requestVocabularyImport() },
+                    onReset: model.wordBankSnapshot.isImported ? { model.resetToBundledWordBank() } : nil
+                )
+                .frame(maxWidth: 760)
 
                 Text("Recommendation: start with the 100-word test to set your PET bar, then use daily challenges to keep failed words coming back until they are mastered.")
                     .font(.system(size: 20, weight: .medium, design: .default))
@@ -292,6 +309,12 @@ struct DashboardView: View {
                     )
                 }
 
+                WordBankCard(
+                    snapshot: model.wordBankSnapshot,
+                    onImport: { model.requestVocabularyImport() },
+                    onReset: model.wordBankSnapshot.isImported ? { model.resetToBundledWordBank() } : nil
+                )
+
                 if let personalizedMissionPlan = model.personalizedMissionPlan {
                     SurfaceCard(title: "Today's Personalized Mission") {
                         VStack(alignment: .leading, spacing: 16) {
@@ -424,6 +447,56 @@ struct DashboardView: View {
                 }
             }
             .padding(.vertical, 6)
+        }
+    }
+}
+
+struct WordBankCard: View {
+    let snapshot: WordBankSnapshot
+    let onImport: () -> Void
+    let onReset: (() -> Void)?
+
+    var body: some View {
+        SurfaceCard(title: "Active Word Bank") {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .top, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(snapshot.title)
+                            .font(.system(size: 28, weight: .bold, design: .serif))
+                            .foregroundStyle(AppPalette.ink)
+                        Text(snapshot.subtitle)
+                            .font(.system(size: 18, weight: .medium, design: .default))
+                            .foregroundStyle(AppPalette.muted)
+                    }
+
+                    Spacer()
+
+                    VStack(alignment: .trailing, spacing: 10) {
+                        PillLabel(
+                            text: snapshot.badgeText,
+                            tint: snapshot.isImported ? AppPalette.terracotta : AppPalette.blue,
+                            fill: snapshot.isImported ? AppPalette.oliveSoft : AppPalette.blueSoft
+                        )
+                        Text("\(snapshot.wordCount) words")
+                            .font(.system(size: 17, weight: .semibold, design: .default))
+                            .foregroundStyle(AppPalette.muted)
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    Button("IMPORT WORD BANK") {
+                        onImport()
+                    }
+                    .buttonStyle(SecondaryNavButtonStyle())
+
+                    if let onReset {
+                        Button("USE BUNDLED STARTER") {
+                            onReset()
+                        }
+                        .buttonStyle(SecondaryNavButtonStyle())
+                    }
+                }
+            }
         }
     }
 }

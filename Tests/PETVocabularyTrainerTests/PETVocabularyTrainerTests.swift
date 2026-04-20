@@ -3,6 +3,59 @@ import Testing
 @testable import PETVocabularyTrainer
 
 struct PETVocabularyTrainerTests {
+    @Test func petPDFWordParserHandlesWrappedPETEntries() throws {
+        let sample = """
+        剑桥五级-PET词汇-2020更新版词库 学习日期:
+        第20关
+        ①
+        crowd 群众,
+        一伙
+        mathematics/math
+        s 数学
+        examination/exa
+        m 检查,考试
+        l 我
+        May 五月
+        may 可以,可能
+        打印时间:2025-07-21
+        """
+
+        let entries = try PETPDFWordParser.parse(text: sample)
+
+        #expect(entries.count == 6)
+        #expect(entries[0].english == "crowd")
+        #expect(entries[0].primaryChinese == "群众,一伙")
+        #expect(entries[1].english == "mathematics/maths")
+        #expect(entries[1].primaryChinese == "数学")
+        #expect(entries[2].english == "examination/exam")
+        #expect(entries[3].english == "I")
+        #expect(entries[4].english == "May")
+        #expect(entries[5].english == "may")
+    }
+
+    @Test func vocabularyImportServiceImportsCSVBanksForTesting() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("pet-bank.csv")
+
+        defer {
+            try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent())
+        }
+
+        let contents = (0..<120)
+            .map { "word\($0),词\($0)" }
+            .joined(separator: "\n")
+        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try contents.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let imported = try VocabularyImportService.importWordLibrary(from: fileURL, seedWords: try SeedWordLoader.loadWords())
+
+        #expect(imported.words.count == 120)
+        #expect(imported.metadata.source == .csv)
+        #expect(imported.metadata.wordCount == 120)
+        #expect(imported.words.first?.id == "word0")
+    }
+
     @Test func placementEstimatorConvertsPlacementScoreIntoVocabularyBand() {
         let estimate = PlacementEstimator.estimate(correctAnswers: 80, totalQuestions: 100)
 

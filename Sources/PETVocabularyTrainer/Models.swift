@@ -229,6 +229,31 @@ struct AppStoreData: Codable, Hashable {
     var activeSession: ActiveSession?
     var dailyStreak: Int = 0
     var lastCompletedDayKey: String?
+    var importedLibrary: WordLibraryMetadata?
+}
+
+enum ImportedWordLibrarySource: String, Codable, Hashable {
+    case pdf
+    case json
+    case csv
+    case plainText
+
+    var displayName: String {
+        switch self {
+        case .pdf: return "PDF"
+        case .json: return "JSON"
+        case .csv: return "CSV"
+        case .plainText: return "Text"
+        }
+    }
+}
+
+struct WordLibraryMetadata: Codable, Hashable {
+    let name: String
+    let sourceFilename: String
+    let importedAt: Date
+    let wordCount: Int
+    let source: ImportedWordLibrarySource
 }
 
 struct FeedbackSummary: Hashable {
@@ -286,4 +311,12 @@ struct QuizAnswerFeedback: Hashable {
     let autoAdvanceDelay: TimeInterval
     let headline: String
     let detail: String
+}
+
+struct WordBankSnapshot: Hashable {
+    let title: String
+    let subtitle: String
+    let wordCount: Int
+    let badgeText: String
+    let isImported: Bool
 }

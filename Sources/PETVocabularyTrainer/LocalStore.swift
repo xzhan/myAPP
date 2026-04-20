@@ -37,6 +37,36 @@ struct LocalStore {
         try data.write(to: url, options: .atomic)
     }
 
+    func loadImportedWords() throws -> [VocabularyWord]? {
+        let importURL = importedWordsURL
+        guard fileManager.fileExists(atPath: importURL.path) else {
+            return nil
+        }
+
+        let data = try Data(contentsOf: importURL)
+        return try JSONDecoder().decode([VocabularyWord].self, from: data)
+    }
+
+    func saveImportedWords(_ words: [VocabularyWord]) throws {
+        try fileManager.createDirectory(at: importedWordsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(words)
+        try data.write(to: importedWordsURL, options: .atomic)
+    }
+
+    func deleteImportedWords() throws {
+        guard fileManager.fileExists(atPath: importedWordsURL.path) else {
+            return
+        }
+
+        try fileManager.removeItem(at: importedWordsURL)
+    }
+
+    private var importedWordsURL: URL {
+        url.deletingLastPathComponent().appendingPathComponent("imported_words.json")
+    }
+
     private static func defaultURL(fileManager: FileManager) -> URL {
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return base

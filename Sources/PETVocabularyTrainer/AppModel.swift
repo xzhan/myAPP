@@ -27,6 +27,7 @@ final class AppModel {
     var errorMessage: String?
     var answerFeedback: QuizAnswerFeedback?
     var quizStepID = UUID()
+    var isShowingLibraryImporter = false
 
     init(
         store: LocalStore = LocalStore(),
@@ -149,6 +150,26 @@ final class AppModel {
         )
     }
 
+    var wordBankSnapshot: WordBankSnapshot {
+        if let importedLibrary = data.importedLibrary {
+            return WordBankSnapshot(
+                title: importedLibrary.name,
+                subtitle: "\(importedLibrary.source.displayName) import from \(importedLibrary.sourceFilename). Placement and daily missions now use this full bank.",
+                wordCount: words.count,
+                badgeText: "\(importedLibrary.source.displayName.uppercased()) IMPORT",
+                isImported: true
+            )
+        }
+
+        return WordBankSnapshot(
+            title: "Built-in PET Starter",
+            subtitle: "A bundled starter list for quick testing. Import a full PET PDF, CSV, TXT, or JSON bank whenever you are ready.",
+            wordCount: words.count,
+            badgeText: "BUNDLED",
+            isImported: false
+        )
+    }
+
     var livePlacementEstimate: PlacementEstimate? {
         guard let session = data.activeSession,
               session.mode == .placement,
@@ -180,8 +201,28 @@ final class AppModel {
 
     func bootstrap() {
         do {
-            words = try SeedWordLoader.loadWords()
-            data = try store.load()
+            let seedWords = try SeedWordLoader.loadWords()
+            var loadedData = try store.load()
+            let importedWords = try store.loadImportedWords()
+
+            if let importedWords {
+                let metadata = loadedData.importedLibrary ?? WordLibraryMetadata(
+                    name: "Imported PET Word Bank",
+                    sourceFilename: "imported_words.json",
+                    importedAt: .now,
+                    wordCount: importedWords.count,
+                    source: .json
+                )
+                loadedData.importedLibrary = metadata
+                words = importedWords
+            } else {
+                if loadedData.importedLibrary != nil {
+                    loadedData = AppStoreData()
+                }
+                words = seedWords
+            }
+
+            data = loadedData
             ensureProgressEntries()
             latestSummary = sessionHistory.first
 
@@ -213,6 +254,44 @@ final class AppModel {
     func openHistory() {
         cancelAutoAdvance()
         screen = .history
+    }
+
+    func requestVocabularyImport() {
+        isShowingLibraryImporter = true
+    }
+
+    func handleVocabularyImportSelection(_ result: Result<URL, Error>) {
+        isShowingLibraryImporter = false
+
+        switch result {
+        case .success(let url):
+            importVocabulary(from: url)
+        case .failure(let error):
+            let nsError = error as NSError
+            if nsError.domain == NSCocoaErrorDomain, nsError.code == NSUserCancelledError {
+                return
+            }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func resetToBundledWordBank() {
+        cancelAutoAdvance()
+
+        do {
+            words = try SeedWordLoader.loadWords()
+            data = AppStoreData()
+            latestSummary = nil
+            answerFeedback = nil
+            quizStepID = UUID()
+            screen = .onboarding
+            try store.deleteImportedWords()
+            ensureProgressEntries()
+            try persist()
+            errorMessage = "Returned to the bundled starter word bank."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func startPlacement() {
@@ -372,6 +451,29 @@ final class AppModel {
     private func ensureProgressEntries() {
         for word in words where data.progressByWordID[word.id] == nil {
             data.progressByWordID[word.id] = .fresh(for: word.id)
+        }
+    }
+
+    private func importVocabulary(from url: URL) {
+        cancelAutoAdvance()
+
+        do {
+            let seedWords = try SeedWordLoader.loadWords()
+            let importedLibrary = try VocabularyImportService.importWordLibrary(from: url, seedWords: seedWords)
+            try store.saveImportedWords(importedLibrary.words)
+
+            words = importedLibrary.words
+            data = AppStoreData()
+            data.importedLibrary = importedLibrary.metadata
+            latestSummary = nil
+            answerFeedback = nil
+            quizStepID = UUID()
+            screen = .onboarding
+            ensureProgressEntries()
+            try persist()
+            errorMessage = "Imported \(importedLibrary.metadata.wordCount) words from \(importedLibrary.metadata.sourceFilename). Your next test will use this bank."
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
