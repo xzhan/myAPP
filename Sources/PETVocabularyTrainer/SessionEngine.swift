@@ -132,6 +132,16 @@ enum FeedbackGenerator {
             topicSentence = "You kept the momentum going across topics."
         }
 
+        let masteredWordHighlight: String
+        if let firstMastered = session.newlyMasteredWordIDs.first,
+           let word = wordsByID[firstMastered] {
+            masteredWordHighlight = "You locked in \(word.english)."
+        } else if masteredCount > 0 {
+            masteredWordHighlight = "Your review loop is paying off."
+        } else {
+            masteredWordHighlight = "Your next mission can push this higher."
+        }
+
         let recommendedMission: String
         if let firstWeak = weakTopics.first {
             recommendedMission = "Retry 8 weak \(firstWeak.displayName.lowercased()) words"
@@ -139,7 +149,7 @@ enum FeedbackGenerator {
             recommendedMission = "Start another mixed PET mission"
         }
 
-        let body = "You answered \(session.correctAnswers) of \(session.questions.count) correctly and mastered \(masteredCount) new PET \(wordLabel). \(topicSentence)"
+        let body = "You answered \(session.correctAnswers) of \(session.questions.count) correctly and mastered \(masteredCount) new PET \(wordLabel). \(masteredWordHighlight) \(topicSentence)"
 
         return FeedbackSummary(
             headline: headline,
@@ -147,6 +157,57 @@ enum FeedbackGenerator {
             weakTopics: Array(weakTopics.prefix(2)),
             recommendedMissionTitle: recommendedMission
         )
+    }
+}
+
+enum ProgressAnalytics {
+    static func totalPoints(from sessions: [SessionSummary]) -> Int {
+        sessions.reduce(0) { $0 + $1.pointsEarned }
+    }
+
+    static func masteryPercent(masteredCount: Int, totalWordCount: Int) -> Int {
+        guard totalWordCount > 0 else { return 0 }
+        return Int((Double(masteredCount) / Double(totalWordCount)) * 100.0)
+    }
+
+    static func rankTitle(forMasteryPercent masteryPercent: Int) -> String {
+        switch masteryPercent {
+        case 0..<15: return "Explorer"
+        case 15..<35: return "Pathfinder"
+        case 35..<60: return "Climber"
+        case 60..<85: return "Navigator"
+        default: return "Champion"
+        }
+    }
+
+    static func focusTopics(words: [VocabularyWord], data: AppStoreData, limit: Int = 3) -> [WordTopic] {
+        let wordsByID = Dictionary(uniqueKeysWithValues: words.map { ($0.id, $0) })
+        let queueTopics = data.progressByWordID.values
+            .filter { $0.reviewPriority > 0 }
+            .sorted { lhs, rhs in
+                if lhs.reviewPriority != rhs.reviewPriority {
+                    return lhs.reviewPriority > rhs.reviewPriority
+                }
+                return (lhs.lastIncorrectAt ?? .distantPast) > (rhs.lastIncorrectAt ?? .distantPast)
+            }
+            .compactMap { wordsByID[$0.wordID]?.topic }
+
+        let historyTopics = data.sessions.prefix(5).flatMap(\.weakTopics)
+        return Array((queueTopics + historyTopics).uniqued().prefix(limit))
+    }
+
+    static func missionSubtitle(hasCompletedPlacement: Bool, reviewCount: Int, focusTopics: [WordTopic], dailyStreak: Int) -> String {
+        if !hasCompletedPlacement {
+            return "Get your first baseline before you start chasing streaks."
+        }
+        if reviewCount > 0 {
+            let focusText = focusTopics.first?.displayName.lowercased() ?? "your weak topics"
+            return "Priority mission: rescue review words and tighten up \(focusText)."
+        }
+        if dailyStreak > 1 {
+            return "Keep your \(dailyStreak)-day streak alive with a fresh 15-word sprint."
+        }
+        return "Build momentum with a fresh mixed mission and start stacking points."
     }
 }
 

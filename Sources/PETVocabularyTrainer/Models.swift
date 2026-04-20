@@ -197,6 +197,15 @@ struct SessionSummary: Codable, Identifiable, Hashable {
         self.body = body
         self.recommendedMissionTitle = recommendedMissionTitle
     }
+
+    var accuracyPercent: Int {
+        guard totalQuestions > 0 else { return 0 }
+        return Int((Double(correctAnswers) / Double(totalQuestions)) * 100.0)
+    }
+
+    var pointsEarned: Int {
+        (correctAnswers * 10) + (newlyMasteredCount * 25)
+    }
 }
 
 struct AppStoreData: Codable, Hashable {
@@ -218,7 +227,12 @@ struct FeedbackSummary: Hashable {
 struct DashboardStats: Hashable {
     let masteredCount: Int
     let totalWordCount: Int
+    let masteryPercent: Int
     let reviewCount: Int
     let dailyStreak: Int
+    let totalPoints: Int
+    let rankTitle: String
     let missionTitle: String
+    let missionSubtitle: String
+    let focusTopics: [WordTopic]
 }

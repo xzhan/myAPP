@@ -28,22 +28,34 @@ final class AppModel {
 
     var dashboardStats: DashboardStats {
         let masteredCount = data.progressByWordID.values.filter(\.isMastered).count
+        let masteryPercent = ProgressAnalytics.masteryPercent(masteredCount: masteredCount, totalWordCount: words.count)
         let reviewCount = data.progressByWordID.values.filter { $0.reviewPriority > 0 }.count
+        let focusTopics = ProgressAnalytics.focusTopics(words: words, data: data)
         let missionTitle: String
         if !data.hasCompletedPlacement {
             missionTitle = "Take your placement test"
         } else if reviewCount > 0 {
-            missionTitle = "Clear \(min(8, reviewCount)) review words"
+            missionTitle = "Review Rescue"
         } else {
-            missionTitle = "Start a 15-word PET mission"
+            missionTitle = "Daily Sprint"
         }
 
         return DashboardStats(
             masteredCount: masteredCount,
             totalWordCount: words.count,
+            masteryPercent: masteryPercent,
             reviewCount: reviewCount,
             dailyStreak: data.dailyStreak,
-            missionTitle: missionTitle
+            totalPoints: ProgressAnalytics.totalPoints(from: data.sessions),
+            rankTitle: ProgressAnalytics.rankTitle(forMasteryPercent: masteryPercent),
+            missionTitle: missionTitle,
+            missionSubtitle: ProgressAnalytics.missionSubtitle(
+                hasCompletedPlacement: data.hasCompletedPlacement,
+                reviewCount: reviewCount,
+                focusTopics: focusTopics,
+                dailyStreak: data.dailyStreak
+            ),
+            focusTopics: focusTopics
         )
     }
 
@@ -62,6 +74,25 @@ final class AppModel {
         guard let session = data.activeSession,
               session.currentIndex < session.questions.count else { return [] }
         return session.questions[session.currentIndex].choices
+    }
+
+    var currentQuestionNumber: Int {
+        guard let session = data.activeSession else { return 0 }
+        return min(session.currentIndex + 1, session.questions.count)
+    }
+
+    var currentAccuracyPercent: Int {
+        guard let session = data.activeSession, !session.attempts.isEmpty else { return 0 }
+        return Int((Double(session.correctAnswers) / Double(session.attempts.count)) * 100.0)
+    }
+
+    var currentWordProgress: WordProgress? {
+        guard let word = currentQuestionWord else { return nil }
+        return data.progressByWordID[word.id] ?? .fresh(for: word.id)
+    }
+
+    var latestPointsEarned: Int {
+        latestSummary?.pointsEarned ?? 0
     }
 
     var reviewWords: [(word: VocabularyWord, progress: WordProgress)] {

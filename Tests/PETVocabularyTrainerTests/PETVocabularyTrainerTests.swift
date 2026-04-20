@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import PETVocabularyTrainer
 
@@ -71,5 +72,94 @@ struct PETVocabularyTrainerTests {
         #expect(summary.weakTopics == [.school])
         #expect(summary.body.contains("mastered 1 new PET word"))
         #expect(summary.recommendedMissionTitle.contains("school"))
+    }
+
+    @Test func progressAnalyticsSummarizesPointsFocusTopicsAndRank() {
+        let words = [
+            VocabularyWord(id: "school-1", english: "borrow", primaryChinese: "借入", topic: .school),
+            VocabularyWord(id: "school-2", english: "teacher", primaryChinese: "老师", topic: .school),
+            VocabularyWord(id: "travel-1", english: "ticket", primaryChinese: "票", topic: .travel)
+        ]
+
+        let sampleSummary = SessionSummary(
+            mode: .mission,
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            completedAt: Date(timeIntervalSince1970: 1_300),
+            totalQuestions: 5,
+            correctAnswers: 4,
+            newlyMasteredCount: 1,
+            weakTopics: [.travel],
+            headline: "Nice work",
+            body: "You answered 4 of 5 correctly.",
+            recommendedMissionTitle: "Retry travel words"
+        )
+
+        var data = AppStoreData()
+        data.sessions = [sampleSummary]
+        data.progressByWordID["school-1"] = WordProgress(
+            wordID: "school-1",
+            currentCorrectStreak: 0,
+            totalCorrect: 1,
+            totalIncorrect: 2,
+            isMastered: false,
+            lastSeenAt: .now,
+            lastIncorrectAt: .now,
+            reviewPriority: 3
+        )
+        data.progressByWordID["school-2"] = WordProgress(
+            wordID: "school-2",
+            currentCorrectStreak: 1,
+            totalCorrect: 2,
+            totalIncorrect: 1,
+            isMastered: false,
+            lastSeenAt: .now,
+            lastIncorrectAt: .now.addingTimeInterval(-100),
+            reviewPriority: 2
+        )
+
+        let focusTopics = ProgressAnalytics.focusTopics(words: words, data: data)
+
+        #expect(ProgressAnalytics.totalPoints(from: [sampleSummary]) == 65)
+        #expect(focusTopics.first == .school)
+        #expect(ProgressAnalytics.rankTitle(forMasteryPercent: 62) == "Navigator")
+    }
+
+    @Test func localStoreRoundTripsIso8601Dates() throws {
+        let formatter = ISO8601DateFormatter()
+        let sampleDate = try #require(formatter.date(from: "2026-04-20T08:30:00Z"))
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("store.json")
+
+        defer {
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+        }
+
+        let summary = SessionSummary(
+            mode: .placement,
+            startedAt: sampleDate,
+            completedAt: sampleDate,
+            totalQuestions: 10,
+            correctAnswers: 7,
+            newlyMasteredCount: 2,
+            weakTopics: [.school],
+            headline: "Nice work",
+            body: "Coach note",
+            recommendedMissionTitle: "Retry school words"
+        )
+
+        var storeData = AppStoreData()
+        storeData.hasCompletedPlacement = true
+        storeData.dailyStreak = 4
+        storeData.sessions = [summary]
+
+        let store = LocalStore(url: url)
+        try store.save(storeData)
+        let loaded = try store.load()
+
+        #expect(loaded.sessions.count == 1)
+        #expect(loaded.sessions.first?.completedAt == sampleDate)
+        #expect(loaded.dailyStreak == 4)
+        #expect(loaded.hasCompletedPlacement)
     }
 }

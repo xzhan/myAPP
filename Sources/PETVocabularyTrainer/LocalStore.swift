@@ -23,7 +23,9 @@ struct LocalStore {
         }
 
         let data = try Data(contentsOf: url)
-        return try JSONDecoder().decode(AppStoreData.self, from: data)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(AppStoreData.self, from: data)
     }
 
     func save(_ storeData: AppStoreData) throws {
