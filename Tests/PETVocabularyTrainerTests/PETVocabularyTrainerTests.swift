@@ -3,6 +3,19 @@ import Testing
 @testable import PETVocabularyTrainer
 
 struct PETVocabularyTrainerTests {
+    @Test func bundledWordListIsLargeUniqueAndWellDistributed() throws {
+        let words = try SeedWordLoader.loadWords()
+        let ids = Set(words.map(\.id))
+        let englishWords = Set(words.map(\.english))
+        let topicCounts = Dictionary(grouping: words, by: \.topic).mapValues(\.count)
+
+        #expect(words.count >= 140)
+        #expect(ids.count == words.count)
+        #expect(englishWords.count == words.count)
+        #expect(Set(topicCounts.keys) == Set(WordTopic.allCases))
+        #expect(topicCounts.values.allSatisfy { $0 >= 8 })
+    }
+
     @Test func masteryEngineMarksWordMasteredAfterThreeCorrectAnswers() {
         var progress = WordProgress.fresh(for: "pet-borrow")
 

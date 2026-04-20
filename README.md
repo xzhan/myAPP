@@ -14,8 +14,8 @@ A native macOS SwiftUI vocabulary trainer prototype focused on English -> Chines
 
 ## Current scope
 
-This prototype ships with a built-in starter PET-style seed list in `Sources/PETVocabularyTrainer/Resources/pet_words.json`.
-It is structured so the list can be expanded to a fuller PET dataset later.
+This prototype now ships with a built-in PET-style core list of 140 words in `Sources/PETVocabularyTrainer/Resources/pet_words.json`.
+It is still structured so the list can grow further or later accept custom imports.
 
 ## Run
 
