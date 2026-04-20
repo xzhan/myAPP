@@ -378,6 +378,7 @@ struct QuizView: View {
                                                 PillLabel(text: "+\(feedback.pointsEarned) POINTS", tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
                                             }
                                         }
+                                        .transition(.scale.combined(with: .opacity))
                                     }
                                 }
 
@@ -776,37 +777,114 @@ struct AnswerFeedbackCard: View {
 
     var body: some View {
         SurfaceCard {
-            HStack(alignment: .center, spacing: 20) {
-                ZStack {
-                    Circle()
-                        .fill((feedback.isCorrect ? AppPalette.success : AppPalette.terracotta).opacity(0.15))
-                        .frame(width: 72, height: 72)
+            VStack(alignment: .leading, spacing: 18) {
+                if feedback.newlyMastered {
+                    MasteryCelebrationBadge()
+                }
 
-                    Image(systemName: feedback.isCorrect ? "checkmark.circle.fill" : "arrow.uturn.backward.circle.fill")
-                        .font(.system(size: 34, weight: .semibold))
-                        .foregroundStyle(feedback.isCorrect ? AppPalette.success : AppPalette.terracotta)
+                HStack(alignment: .center, spacing: 20) {
+                    ZStack {
+                        Circle()
+                            .fill((feedback.isCorrect ? AppPalette.success : AppPalette.terracotta).opacity(0.15))
+                            .frame(width: 72, height: 72)
+
+                        Image(systemName: feedback.isCorrect ? "checkmark.circle.fill" : "arrow.uturn.backward.circle.fill")
+                            .font(.system(size: 34, weight: .semibold))
+                            .foregroundStyle(feedback.isCorrect ? AppPalette.success : AppPalette.terracotta)
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(feedback.headline)
+                            .font(.system(size: 34, weight: .bold, design: .serif))
+                            .foregroundStyle(AppPalette.ink)
+                        Text(feedback.detail)
+                            .font(.system(size: 20, weight: .medium, design: .default))
+                            .foregroundStyle(AppPalette.muted)
+                        HStack(spacing: 10) {
+                            PillLabel(text: "Correct answer: \(feedback.correctChoice)", tint: AppPalette.blue, fill: AppPalette.blueSoft)
+                            if feedback.pointsEarned > 0 {
+                                PillLabel(text: "+\(feedback.pointsEarned) points", tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
+                            }
+                        }
+                    }
+
+                    Spacer()
+
+                    Button("CONTINUE NOW", action: action)
+                        .buttonStyle(HeroButtonStyle(kind: .filled))
+                        .frame(width: 270)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(feedback.headline)
-                        .font(.system(size: 34, weight: .bold, design: .serif))
-                        .foregroundStyle(AppPalette.ink)
-                    Text(feedback.detail)
-                        .font(.system(size: 20, weight: .medium, design: .default))
-                        .foregroundStyle(AppPalette.muted)
-                    HStack(spacing: 10) {
-                        PillLabel(text: "Correct answer: \(feedback.correctChoice)", tint: AppPalette.blue, fill: AppPalette.blueSoft)
-                        if feedback.pointsEarned > 0 {
-                            PillLabel(text: "+\(feedback.pointsEarned) points", tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
-                        }
+                    HStack {
+                        Text("Continuing automatically...")
+                            .font(.system(size: 17, weight: .semibold, design: .default))
+                            .foregroundStyle(AppPalette.muted)
+                        Spacer()
+                        Text(feedback.newlyMastered ? "Hold the moment" : "Short pause")
+                            .font(.system(size: 15, weight: .medium, design: .default))
+                            .foregroundStyle(AppPalette.muted)
                     }
+                    AutoAdvanceProgressBar(duration: feedback.autoAdvanceDelay)
                 }
+            }
+        }
+    }
+}
 
-                Spacer()
+struct MasteryCelebrationBadge: View {
+    @State private var animate = false
 
-                Button("CONTINUE", action: action)
-                    .buttonStyle(HeroButtonStyle(kind: .filled))
-                    .frame(width: 250)
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 20, weight: .bold))
+            Text("MASTERED WORD")
+                .font(.system(size: 16, weight: .bold, design: .default))
+                .tracking(1.5)
+            Image(systemName: "sparkles")
+                .font(.system(size: 20, weight: .bold))
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .foregroundStyle(AppPalette.success)
+        .background(AppPalette.oliveSoft)
+        .clipShape(Capsule())
+        .scaleEffect(animate ? 1.04 : 0.96)
+        .shadow(color: AppPalette.success.opacity(0.15), radius: 16, x: 0, y: 8)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true)) {
+                animate = true
+            }
+        }
+    }
+}
+
+struct AutoAdvanceProgressBar: View {
+    let duration: TimeInterval
+    @State private var fillAmount: CGFloat = 0
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 999, style: .continuous)
+                    .fill(AppPalette.border.opacity(0.45))
+                RoundedRectangle(cornerRadius: 999, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [AppPalette.terracotta, AppPalette.olive],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: proxy.size.width * fillAmount)
+            }
+        }
+        .frame(height: 10)
+        .onAppear {
+            fillAmount = 0
+            withAnimation(.linear(duration: duration)) {
+                fillAmount = 1
             }
         }
     }
@@ -870,6 +948,8 @@ struct ChoiceButton: View {
         .buttonStyle(.plain)
         .opacity(state == .dimmed ? 0.65 : 1.0)
         .shadow(color: Color.black.opacity(0.03), radius: 12, x: 0, y: 6)
+        .scaleEffect(state == .correct ? 1.01 : 1.0)
+        .animation(.spring(response: 0.28, dampingFraction: 0.82), value: state)
     }
 
     private var circleFill: Color {

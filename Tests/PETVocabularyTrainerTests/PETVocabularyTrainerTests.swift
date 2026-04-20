@@ -47,6 +47,49 @@ struct PETVocabularyTrainerTests {
         #expect(model.currentQuestionNumber == 2)
     }
 
+    @MainActor
+    @Test func appModelCanAutoAdvanceAfterFeedback() async {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("store.json")
+
+        defer {
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+        }
+
+        let model = AppModel(
+            store: LocalStore(url: url),
+            autoAdvanceDelayMultiplier: 0,
+            sleepForNanoseconds: { _ in
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+        )
+        model.words = [
+            VocabularyWord(id: "w1", english: "borrow", primaryChinese: "借入", topic: .school),
+            VocabularyWord(id: "w2", english: "teacher", primaryChinese: "老师", topic: .school),
+            VocabularyWord(id: "w3", english: "cinema", primaryChinese: "电影院", topic: .places),
+            VocabularyWord(id: "w4", english: "ticket", primaryChinese: "票", topic: .transport)
+        ]
+        model.data.progressByWordID["w1"] = .fresh(for: "w1")
+        model.data.progressByWordID["w2"] = .fresh(for: "w2")
+        model.data.progressByWordID["w3"] = .fresh(for: "w3")
+        model.data.progressByWordID["w4"] = .fresh(for: "w4")
+        model.data.activeSession = ActiveSession(
+            mode: .mission,
+            questions: [
+                PersistedQuestion(wordID: "w1", choices: ["借入", "老师", "电影院", "票"]),
+                PersistedQuestion(wordID: "w2", choices: ["老师", "借入", "电影院", "票"])
+            ]
+        )
+
+        model.submit(choice: "借入")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(model.answerFeedback == nil)
+        #expect(model.currentQuestionWord?.id == "w2")
+        #expect(model.currentQuestionNumber == 2)
+    }
+
     @Test func bundledWordListIsLargeUniqueAndWellDistributed() throws {
         let words = try SeedWordLoader.loadWords()
         let ids = Set(words.map(\.id))

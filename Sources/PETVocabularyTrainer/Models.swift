@@ -244,6 +244,7 @@ struct QuizAnswerFeedback: Hashable {
     let newlyMastered: Bool
     let resultingStreak: Int
     let pointsEarned: Int
+    let autoAdvanceDelay: TimeInterval
     let headline: String
     let detail: String
 }

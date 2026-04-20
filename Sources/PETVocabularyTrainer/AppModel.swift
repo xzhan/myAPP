@@ -16,6 +16,9 @@ final class AppModel {
     }
 
     private let store: LocalStore
+    private let autoAdvanceDelayMultiplier: Double
+    private let sleepForNanoseconds: @Sendable (UInt64) async -> Void
+    private var autoAdvanceTask: Task<Void, Never>?
 
     var words: [VocabularyWord] = []
     var data = AppStoreData()
@@ -25,8 +28,16 @@ final class AppModel {
     var answerFeedback: QuizAnswerFeedback?
     var quizStepID = UUID()
 
-    init(store: LocalStore = LocalStore()) {
+    init(
+        store: LocalStore = LocalStore(),
+        autoAdvanceDelayMultiplier: Double = 1.0,
+        sleepForNanoseconds: @escaping @Sendable (UInt64) async -> Void = { nanoseconds in
+            try? await Task.sleep(nanoseconds: nanoseconds)
+        }
+    ) {
         self.store = store
+        self.autoAdvanceDelayMultiplier = autoAdvanceDelayMultiplier
+        self.sleepForNanoseconds = sleepForNanoseconds
     }
 
     var wordsByID: [String: VocabularyWord] {
@@ -150,14 +161,17 @@ final class AppModel {
     }
 
     func openDashboard() {
+        cancelAutoAdvance()
         screen = .dashboard
     }
 
     func openReview() {
+        cancelAutoAdvance()
         screen = .review
     }
 
     func openHistory() {
+        cancelAutoAdvance()
         screen = .history
     }
 
@@ -204,24 +218,34 @@ final class AppModel {
         }
 
         data.activeSession = session
-        answerFeedback = makeAnswerFeedback(
+        let feedback = makeAnswerFeedback(
             selectedChoice: choice,
             correctChoice: word.primaryChinese,
             isCorrect: isCorrect,
             newlyMastered: newlyMastered,
             resultingStreak: progress.currentCorrectStreak
         )
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.84)) {
+            answerFeedback = feedback
+        }
+        scheduleAutoAdvance(for: feedback)
     }
 
-    func advanceAfterFeedback() {
+    func advanceAfterFeedback(triggeredAutomatically: Bool = false) {
         guard var session = data.activeSession, answerFeedback != nil else {
             return
+        }
+
+        if triggeredAutomatically {
+            autoAdvanceTask = nil
+        } else {
+            cancelAutoAdvance()
         }
 
         answerFeedback = nil
         session.currentIndex += 1
 
-        withAnimation(.easeInOut(duration: 0.28)) {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
             quizStepID = UUID()
         }
 
@@ -240,6 +264,7 @@ final class AppModel {
             return
         }
 
+        cancelAutoAdvance()
         latestSummary = nil
         errorMessage = nil
         answerFeedback = nil
@@ -250,6 +275,7 @@ final class AppModel {
     }
 
     private func finish(session: ActiveSession) {
+        cancelAutoAdvance()
         let feedback = FeedbackGenerator.makeSummary(from: session, wordsByID: wordsByID)
         let completedAt = Date()
         let summary = SessionSummary(
@@ -306,19 +332,24 @@ final class AppModel {
         resultingStreak: Int
     ) -> QuizAnswerFeedback {
         let pointsEarned = (isCorrect ? 10 : 0) + (newlyMastered ? 25 : 0)
+        let autoAdvanceDelay: TimeInterval
         let headline: String
         let detail: String
 
         if newlyMastered {
+            autoAdvanceDelay = 1.85
             headline = "Mastery unlocked"
             detail = "You got it right and completed the 3-correct streak for this word."
         } else if isCorrect && resultingStreak == 2 {
+            autoAdvanceDelay = 1.45
             headline = "Nice work"
             detail = "One more correct answer on a later attempt will mark this word as mastered."
         } else if isCorrect {
+            autoAdvanceDelay = 1.2
             headline = "Correct"
             detail = "You chose the right Chinese meaning. Keep building the streak."
         } else {
+            autoAdvanceDelay = 1.75
             headline = "Not quite"
             detail = "The correct answer is \(correctChoice). This word will return soon in review."
         }
@@ -330,9 +361,30 @@ final class AppModel {
             newlyMastered: newlyMastered,
             resultingStreak: resultingStreak,
             pointsEarned: pointsEarned,
+            autoAdvanceDelay: autoAdvanceDelay,
             headline: headline,
             detail: detail
         )
+    }
+
+    private func scheduleAutoAdvance(for feedback: QuizAnswerFeedback) {
+        cancelAutoAdvance()
+
+        let delay = max(0, feedback.autoAdvanceDelay * autoAdvanceDelayMultiplier)
+        autoAdvanceTask = Task { [sleepForNanoseconds, weak self] in
+            await sleepForNanoseconds(UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                guard let self, self.answerFeedback != nil else { return }
+                self.advanceAfterFeedback(triggeredAutomatically: true)
+            }
+        }
+    }
+
+    private func cancelAutoAdvance() {
+        autoAdvanceTask?.cancel()
+        autoAdvanceTask = nil
     }
 
     private func persist() throws {
