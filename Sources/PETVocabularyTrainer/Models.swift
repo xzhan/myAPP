@@ -236,3 +236,14 @@ struct DashboardStats: Hashable {
     let missionSubtitle: String
     let focusTopics: [WordTopic]
 }
+
+struct QuizAnswerFeedback: Hashable {
+    let selectedChoice: String
+    let correctChoice: String
+    let isCorrect: Bool
+    let newlyMastered: Bool
+    let resultingStreak: Int
+    let pointsEarned: Int
+    let headline: String
+    let detail: String
+}

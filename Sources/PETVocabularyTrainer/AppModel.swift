@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 
 @MainActor
 @Observable
@@ -14,13 +15,19 @@ final class AppModel {
         case history
     }
 
-    private let store = LocalStore()
+    private let store: LocalStore
 
     var words: [VocabularyWord] = []
     var data = AppStoreData()
     var screen: Screen = .loading
     var latestSummary: SessionSummary?
     var errorMessage: String?
+    var answerFeedback: QuizAnswerFeedback?
+    var quizStepID = UUID()
+
+    init(store: LocalStore = LocalStore()) {
+        self.store = store
+    }
 
     var wordsByID: [String: VocabularyWord] {
         Dictionary(uniqueKeysWithValues: words.map { ($0.id, $0) })
@@ -79,6 +86,12 @@ final class AppModel {
     var currentQuestionNumber: Int {
         guard let session = data.activeSession else { return 0 }
         return min(session.currentIndex + 1, session.questions.count)
+    }
+
+    var quizProgressCount: Int {
+        guard let session = data.activeSession else { return 0 }
+        let completedCount = session.currentIndex + (answerFeedback == nil ? 0 : 1)
+        return min(completedCount, session.questions.count)
     }
 
     var currentAccuracyPercent: Int {
@@ -166,6 +179,7 @@ final class AppModel {
     func submit(choice: String) {
         guard var session = data.activeSession,
               session.currentIndex < session.questions.count,
+              answerFeedback == nil,
               let word = currentQuestionWord else {
             return
         }
@@ -189,7 +203,28 @@ final class AppModel {
             session.newlyMasteredWordIDs.append(word.id)
         }
 
+        data.activeSession = session
+        answerFeedback = makeAnswerFeedback(
+            selectedChoice: choice,
+            correctChoice: word.primaryChinese,
+            isCorrect: isCorrect,
+            newlyMastered: newlyMastered,
+            resultingStreak: progress.currentCorrectStreak
+        )
+    }
+
+    func advanceAfterFeedback() {
+        guard var session = data.activeSession, answerFeedback != nil else {
+            return
+        }
+
+        answerFeedback = nil
         session.currentIndex += 1
+
+        withAnimation(.easeInOut(duration: 0.28)) {
+            quizStepID = UUID()
+        }
+
         if session.currentIndex >= session.questions.count {
             finish(session: session)
         } else {
@@ -207,6 +242,8 @@ final class AppModel {
 
         latestSummary = nil
         errorMessage = nil
+        answerFeedback = nil
+        quizStepID = UUID()
         data.activeSession = ActiveSession(mode: mode, questions: questions)
         screen = .quiz
         try? persist()
@@ -259,6 +296,43 @@ final class AppModel {
         for word in words where data.progressByWordID[word.id] == nil {
             data.progressByWordID[word.id] = .fresh(for: word.id)
         }
+    }
+
+    private func makeAnswerFeedback(
+        selectedChoice: String,
+        correctChoice: String,
+        isCorrect: Bool,
+        newlyMastered: Bool,
+        resultingStreak: Int
+    ) -> QuizAnswerFeedback {
+        let pointsEarned = (isCorrect ? 10 : 0) + (newlyMastered ? 25 : 0)
+        let headline: String
+        let detail: String
+
+        if newlyMastered {
+            headline = "Mastery unlocked"
+            detail = "You got it right and completed the 3-correct streak for this word."
+        } else if isCorrect && resultingStreak == 2 {
+            headline = "Nice work"
+            detail = "One more correct answer on a later attempt will mark this word as mastered."
+        } else if isCorrect {
+            headline = "Correct"
+            detail = "You chose the right Chinese meaning. Keep building the streak."
+        } else {
+            headline = "Not quite"
+            detail = "The correct answer is \(correctChoice). This word will return soon in review."
+        }
+
+        return QuizAnswerFeedback(
+            selectedChoice: selectedChoice,
+            correctChoice: correctChoice,
+            isCorrect: isCorrect,
+            newlyMastered: newlyMastered,
+            resultingStreak: resultingStreak,
+            pointsEarned: pointsEarned,
+            headline: headline,
+            detail: detail
+        )
     }
 
     private func persist() throws {

@@ -332,6 +332,7 @@ struct QuizView: View {
            let word = model.currentQuestionWord {
             let progress = model.currentWordProgress ?? .fresh(for: word.id)
             let accent = session.mode == .failedReview ? AppPalette.terracotta : AppPalette.olive
+            let feedback = model.answerFeedback
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
@@ -344,53 +345,81 @@ struct QuizView: View {
                         PillLabel(text: session.mode.title.uppercased(), tint: accent, fill: AppPalette.oliveSoft)
                     }
 
-                    ProgressView(value: Double(session.currentIndex), total: Double(session.questions.count))
+                    ProgressView(value: Double(model.quizProgressCount), total: Double(session.questions.count))
                         .tint(accent)
                         .scaleEffect(x: 1, y: 1.8, anchor: .center)
 
-                    SurfaceCard {
-                        HStack(alignment: .top, spacing: 24) {
-                            VStack(alignment: .leading, spacing: 14) {
-                                TopicChip(topic: word.topic)
+                    VStack(alignment: .leading, spacing: 18) {
+                        SurfaceCard {
+                            HStack(alignment: .top, spacing: 24) {
+                                VStack(alignment: .leading, spacing: 18) {
+                                    TopicChip(topic: word.topic)
 
-                                Text(word.english)
-                                    .font(.system(size: 88, weight: .regular, design: .serif))
-                                    .foregroundStyle(AppPalette.ink)
+                                    Text(word.english)
+                                        .font(.system(size: 104, weight: .regular, design: .serif))
+                                        .foregroundStyle(AppPalette.ink)
 
-                                Text("Choose the correct Chinese meaning. A wrong answer resets this word’s streak and pushes it back into review.")
-                                    .font(.system(size: 26, weight: .medium, design: .serif))
-                                    .italic()
-                                    .foregroundStyle(AppPalette.muted)
-                                    .frame(maxWidth: 760, alignment: .leading)
-                            }
+                                    Text("Choose the correct Chinese meaning. A wrong answer resets this word’s streak and pushes it back into review.")
+                                        .font(.system(size: 28, weight: .medium, design: .serif))
+                                        .italic()
+                                        .foregroundStyle(AppPalette.muted)
+                                        .frame(maxWidth: 760, alignment: .leading)
 
-                            Spacer()
+                                    if let feedback {
+                                        HStack(spacing: 10) {
+                                            PillLabel(
+                                                text: feedback.isCorrect ? "CORRECT" : "TRY AGAIN LATER",
+                                                tint: feedback.isCorrect ? AppPalette.success : AppPalette.terracotta,
+                                                fill: feedback.isCorrect ? AppPalette.oliveSoft : Color(red: 0.98, green: 0.92, blue: 0.89)
+                                            )
+                                            if feedback.newlyMastered {
+                                                PillLabel(text: "MASTERED +25", tint: AppPalette.success, fill: AppPalette.oliveSoft)
+                                            } else if feedback.pointsEarned > 0 {
+                                                PillLabel(text: "+\(feedback.pointsEarned) POINTS", tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
+                                            }
+                                        }
+                                    }
+                                }
 
-                            VStack(alignment: .trailing, spacing: 12) {
-                                MetricTile(title: "Accuracy", value: "\(model.currentAccuracyPercent)%", caption: "Current session", tint: AppPalette.blue)
-                                    .frame(width: 230)
-                                MetricTile(title: "Streak", value: "\(progress.currentCorrectStreak) / 3", caption: "Needed for mastery", tint: accent)
-                                    .frame(width: 230)
+                                Spacer()
+
+                                VStack(alignment: .trailing, spacing: 12) {
+                                    MetricTile(title: "Accuracy", value: "\(model.currentAccuracyPercent)%", caption: "Current session", tint: AppPalette.blue)
+                                        .frame(width: 230)
+                                    MetricTile(title: "Streak", value: "\(progress.currentCorrectStreak) / 3", caption: "Needed for mastery", tint: accent)
+                                        .frame(width: 230)
+                                }
                             }
                         }
-                    }
 
-                    VStack(spacing: 14) {
-                        ForEach(Array(model.currentQuestionChoices.enumerated()), id: \.offset) { index, choice in
-                            ChoiceButton(
-                                letter: String(UnicodeScalar(65 + index)!),
-                                text: displayText(for: choice),
-                                accent: accent
-                            ) {
-                                model.submit(choice: choice)
+                        VStack(spacing: 14) {
+                            ForEach(Array(model.currentQuestionChoices.enumerated()), id: \.offset) { index, choice in
+                                ChoiceButton(
+                                    letter: String(UnicodeScalar(65 + index)!),
+                                    text: displayText(for: choice),
+                                    accent: accent,
+                                    state: choiceState(for: choice, feedback: feedback)
+                                ) {
+                                    model.submit(choice: choice)
+                                }
+                                .disabled(feedback != nil)
                             }
                         }
-                    }
 
-                    HStack(spacing: 16) {
-                        MetricTile(title: "Correct", value: "\(session.correctAnswers)", caption: "Score in this mission", tint: AppPalette.success)
-                        MetricTile(title: "Mistakes", value: "\(progress.totalIncorrect)", caption: "This word has come back this many times", tint: AppPalette.terracotta)
+                        if let feedback {
+                            AnswerFeedbackCard(feedback: feedback) {
+                                model.advanceAfterFeedback()
+                            }
+                        }
+
+                        HStack(spacing: 16) {
+                            MetricTile(title: "Correct", value: "\(session.correctAnswers)", caption: "Score in this mission", tint: AppPalette.success)
+                            MetricTile(title: "Mistakes", value: "\(progress.totalIncorrect)", caption: "This word has come back this many times", tint: AppPalette.terracotta)
+                        }
                     }
+                    .id(model.quizStepID)
+                    .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity)))
+                    .animation(.easeInOut(duration: 0.28), value: model.quizStepID)
                 }
                 .padding(.vertical, 6)
             }
@@ -410,6 +439,17 @@ struct QuizView: View {
     private func displayText(for choice: String) -> String {
         let trimmed = choice.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Option unavailable" : trimmed
+    }
+
+    private func choiceState(for choice: String, feedback: QuizAnswerFeedback?) -> ChoiceButton.VisualState {
+        guard let feedback else { return .idle }
+        if choice == feedback.correctChoice {
+            return .correct
+        }
+        if choice == feedback.selectedChoice {
+            return .incorrect
+        }
+        return .dimmed
     }
 }
 
@@ -730,10 +770,60 @@ struct TopicChip: View {
     }
 }
 
+struct AnswerFeedbackCard: View {
+    let feedback: QuizAnswerFeedback
+    let action: () -> Void
+
+    var body: some View {
+        SurfaceCard {
+            HStack(alignment: .center, spacing: 20) {
+                ZStack {
+                    Circle()
+                        .fill((feedback.isCorrect ? AppPalette.success : AppPalette.terracotta).opacity(0.15))
+                        .frame(width: 72, height: 72)
+
+                    Image(systemName: feedback.isCorrect ? "checkmark.circle.fill" : "arrow.uturn.backward.circle.fill")
+                        .font(.system(size: 34, weight: .semibold))
+                        .foregroundStyle(feedback.isCorrect ? AppPalette.success : AppPalette.terracotta)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(feedback.headline)
+                        .font(.system(size: 34, weight: .bold, design: .serif))
+                        .foregroundStyle(AppPalette.ink)
+                    Text(feedback.detail)
+                        .font(.system(size: 20, weight: .medium, design: .default))
+                        .foregroundStyle(AppPalette.muted)
+                    HStack(spacing: 10) {
+                        PillLabel(text: "Correct answer: \(feedback.correctChoice)", tint: AppPalette.blue, fill: AppPalette.blueSoft)
+                        if feedback.pointsEarned > 0 {
+                            PillLabel(text: "+\(feedback.pointsEarned) points", tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
+                        }
+                    }
+                }
+
+                Spacer()
+
+                Button("CONTINUE", action: action)
+                    .buttonStyle(HeroButtonStyle(kind: .filled))
+                    .frame(width: 250)
+            }
+        }
+    }
+}
+
 struct ChoiceButton: View {
+    enum VisualState {
+        case idle
+        case correct
+        case incorrect
+        case dimmed
+    }
+
     let letter: String
     let text: String
     let accent: Color
+    let state: VisualState
     let action: () -> Void
 
     var body: some View {
@@ -741,12 +831,12 @@ struct ChoiceButton: View {
             HStack(spacing: 18) {
                 ZStack {
                     Circle()
-                        .fill(accent.opacity(0.14))
+                        .fill(circleFill)
                         .frame(width: 50, height: 50)
 
                     Text(letter)
                         .font(.system(size: 22, weight: .bold, design: .default))
-                        .foregroundStyle(accent)
+                        .foregroundStyle(letterColor)
                 }
 
                 Text(text)
@@ -766,11 +856,64 @@ struct ChoiceButton: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .stroke(AppPalette.border, lineWidth: 1.2)
+                    .stroke(borderColor, lineWidth: state == .idle ? 1.2 : 2)
             )
+            .overlay(alignment: .trailing) {
+                if let symbol = symbolName {
+                    Image(systemName: symbol)
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(symbolColor)
+                        .padding(.trailing, 22)
+                }
+            }
         }
         .buttonStyle(.plain)
+        .opacity(state == .dimmed ? 0.65 : 1.0)
         .shadow(color: Color.black.opacity(0.03), radius: 12, x: 0, y: 6)
+    }
+
+    private var circleFill: Color {
+        switch state {
+        case .idle: return accent.opacity(0.14)
+        case .correct: return AppPalette.success.opacity(0.14)
+        case .incorrect: return AppPalette.terracotta.opacity(0.14)
+        case .dimmed: return AppPalette.border.opacity(0.22)
+        }
+    }
+
+    private var letterColor: Color {
+        switch state {
+        case .idle: return accent
+        case .correct: return AppPalette.success
+        case .incorrect: return AppPalette.terracotta
+        case .dimmed: return AppPalette.muted
+        }
+    }
+
+    private var borderColor: Color {
+        switch state {
+        case .idle: return AppPalette.border
+        case .correct: return AppPalette.success
+        case .incorrect: return AppPalette.terracotta
+        case .dimmed: return AppPalette.border
+        }
+    }
+
+    private var symbolName: String? {
+        switch state {
+        case .correct: return "checkmark.circle.fill"
+        case .incorrect: return "xmark.circle.fill"
+        case .idle, .dimmed: return nil
+        }
+    }
+
+    private var symbolColor: Color {
+        switch state {
+        case .correct: return AppPalette.success
+        case .incorrect: return AppPalette.terracotta
+        case .idle: return AppPalette.ink
+        case .dimmed: return AppPalette.muted
+        }
     }
 }
 
