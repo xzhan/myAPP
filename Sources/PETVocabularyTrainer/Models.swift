@@ -171,6 +171,7 @@ struct SessionSummary: Codable, Identifiable, Hashable {
     let headline: String
     let body: String
     let recommendedMissionTitle: String
+    let placementTopicInsights: [PlacementTopicInsight]?
 
     init(
         id: String = UUID().uuidString,
@@ -183,7 +184,8 @@ struct SessionSummary: Codable, Identifiable, Hashable {
         weakTopics: [WordTopic],
         headline: String,
         body: String,
-        recommendedMissionTitle: String
+        recommendedMissionTitle: String,
+        placementTopicInsights: [PlacementTopicInsight]? = nil
     ) {
         self.id = id
         self.mode = mode
@@ -196,6 +198,7 @@ struct SessionSummary: Codable, Identifiable, Hashable {
         self.headline = headline
         self.body = body
         self.recommendedMissionTitle = recommendedMissionTitle
+        self.placementTopicInsights = placementTopicInsights
     }
 
     var accuracyPercent: Int {
@@ -205,6 +208,17 @@ struct SessionSummary: Codable, Identifiable, Hashable {
 
     var pointsEarned: Int {
         (correctAnswers * 10) + (newlyMasteredCount * 25)
+    }
+}
+
+struct PlacementTopicInsight: Codable, Hashable {
+    let topic: WordTopic
+    let correctAnswers: Int
+    let totalQuestions: Int
+
+    var accuracyPercent: Int {
+        guard totalQuestions > 0 else { return 0 }
+        return Int((Double(correctAnswers) / Double(totalQuestions)) * 100.0)
     }
 }
 
@@ -251,6 +265,15 @@ struct PlacementStudyPlan: Hashable {
     let estimate: PlacementEstimate
     let focusTopics: [WordTopic]
     let nextWeekActions: [String]
+    let topicInsights: [PlacementTopicInsight]
+}
+
+struct PersonalizedMissionPlan: Hashable {
+    let title: String
+    let subtitle: String
+    let recommendedQuestionCount: Int
+    let focusTopics: [WordTopic]
+    let rewardText: String
 }
 
 struct QuizAnswerFeedback: Hashable {

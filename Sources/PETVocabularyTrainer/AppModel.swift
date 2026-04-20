@@ -136,7 +136,26 @@ final class AppModel {
         return PlacementPlanner.plan(
             correctAnswers: summary.correctAnswers,
             totalQuestions: summary.totalQuestions,
-            weakTopics: summary.weakTopics
+            weakTopics: summary.weakTopics,
+            topicInsights: summary.placementTopicInsights ?? []
+        )
+    }
+
+    var personalizedMissionPlan: PersonalizedMissionPlan? {
+        MissionPersonalizer.plan(
+            from: latestPlacementStudyPlan,
+            reviewCount: dashboardStats.reviewCount,
+            dailyStreak: data.dailyStreak
+        )
+    }
+
+    var livePlacementEstimate: PlacementEstimate? {
+        guard let session = data.activeSession,
+              session.mode == .placement,
+              !session.attempts.isEmpty else { return nil }
+        return PlacementEstimator.estimate(
+            correctAnswers: session.correctAnswers,
+            totalQuestions: session.attempts.count
         )
     }
 
@@ -202,7 +221,14 @@ final class AppModel {
     }
 
     func startMission() {
-        let questions = SessionPlanner.missionQuestions(words: words, data: data, count: min(15, max(10, words.count)))
+        let recommendedCount = personalizedMissionPlan?.recommendedQuestionCount ?? 15
+        let count = min(words.count, max(10, min(recommendedCount, 20)))
+        let questions = SessionPlanner.missionQuestions(
+            words: words,
+            data: data,
+            count: count,
+            preferredTopics: personalizedMissionPlan?.focusTopics ?? []
+        )
         startSession(mode: .mission, questions: questions)
     }
 
@@ -299,6 +325,9 @@ final class AppModel {
         cancelAutoAdvance()
         let feedback = FeedbackGenerator.makeSummary(from: session, wordsByID: wordsByID)
         let completedAt = Date()
+        let placementTopicInsights = session.mode == .placement
+            ? PlacementPlanner.topicInsights(from: session.attempts)
+            : nil
         let summary = SessionSummary(
             mode: session.mode,
             startedAt: session.startedAt,
@@ -309,7 +338,8 @@ final class AppModel {
             weakTopics: feedback.weakTopics,
             headline: feedback.headline,
             body: feedback.body,
-            recommendedMissionTitle: feedback.recommendedMissionTitle
+            recommendedMissionTitle: feedback.recommendedMissionTitle,
+            placementTopicInsights: placementTopicInsights
         )
 
         if session.mode == .placement {

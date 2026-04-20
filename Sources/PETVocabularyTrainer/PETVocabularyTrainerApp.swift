@@ -292,6 +292,43 @@ struct DashboardView: View {
                     )
                 }
 
+                if let personalizedMissionPlan = model.personalizedMissionPlan {
+                    SurfaceCard(title: "Today's Personalized Mission") {
+                        VStack(alignment: .leading, spacing: 16) {
+                            HStack(alignment: .top, spacing: 18) {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(personalizedMissionPlan.title)
+                                        .font(.system(size: 34, weight: .bold, design: .serif))
+                                        .foregroundStyle(AppPalette.ink)
+                                    Text(personalizedMissionPlan.subtitle)
+                                        .font(.system(size: 20, weight: .medium, design: .default))
+                                        .foregroundStyle(AppPalette.muted)
+                                }
+                                Spacer()
+                                MetricTile(
+                                    title: "Mission size",
+                                    value: "\(personalizedMissionPlan.recommendedQuestionCount)",
+                                    caption: "Questions in today's tailored challenge",
+                                    tint: AppPalette.olive
+                                )
+                                .frame(width: 240)
+                            }
+
+                            if !personalizedMissionPlan.focusTopics.isEmpty {
+                                HStack(spacing: 10) {
+                                    ForEach(personalizedMissionPlan.focusTopics, id: \.self) { topic in
+                                        TopicChip(topic: topic)
+                                    }
+                                }
+                            }
+
+                            Text(personalizedMissionPlan.rewardText)
+                                .font(.system(size: 18, weight: .medium, design: .default))
+                                .foregroundStyle(AppPalette.terracotta)
+                        }
+                    }
+                }
+
                 if let plan = model.latestPlacementStudyPlan {
                     SurfaceCard(title: "Latest Placement Estimate") {
                         VStack(alignment: .leading, spacing: 18) {
@@ -350,6 +387,10 @@ struct DashboardView: View {
                                 }
                             }
 
+                            if !plan.topicInsights.isEmpty {
+                                PlacementTopicInsightChart(insights: plan.topicInsights)
+                            }
+
                             PlacementActionList(actions: plan.nextWeekActions)
                         }
                     }
@@ -396,6 +437,7 @@ struct QuizView: View {
             let progress = model.currentWordProgress ?? .fresh(for: word.id)
             let accent = session.mode == .failedReview ? AppPalette.terracotta : AppPalette.olive
             let feedback = model.answerFeedback
+            let livePlacementEstimate = model.livePlacementEstimate
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
@@ -411,6 +453,10 @@ struct QuizView: View {
                     ProgressView(value: Double(model.quizProgressCount), total: Double(session.questions.count))
                         .tint(accent)
                         .scaleEffect(x: 1, y: 1.8, anchor: .center)
+
+                    if session.mode == .placement {
+                        PlacementMilestoneTrack(progress: model.quizProgressCount, totalQuestions: session.questions.count)
+                    }
 
                     VStack(alignment: .leading, spacing: 18) {
                         SurfaceCard {
@@ -450,8 +496,18 @@ struct QuizView: View {
                                 VStack(alignment: .trailing, spacing: 12) {
                                     MetricTile(title: "Accuracy", value: "\(model.currentAccuracyPercent)%", caption: "Current session", tint: AppPalette.blue)
                                         .frame(width: 230)
-                                    MetricTile(title: "Streak", value: "\(progress.currentCorrectStreak) / 3", caption: "Needed for mastery", tint: accent)
+                                    if session.mode == .placement, let livePlacementEstimate {
+                                        MetricTile(
+                                            title: "Projection",
+                                            value: "\(livePlacementEstimate.estimatedVocabularySize)",
+                                            caption: livePlacementEstimate.placementBand,
+                                            tint: AppPalette.terracotta
+                                        )
                                         .frame(width: 230)
+                                    } else {
+                                        MetricTile(title: "Streak", value: "\(progress.currentCorrectStreak) / 3", caption: "Needed for mastery", tint: accent)
+                                            .frame(width: 230)
+                                    }
                                 }
                             }
                         }
@@ -474,6 +530,18 @@ struct QuizView: View {
                             AnswerFeedbackCard(feedback: feedback) {
                                 model.advanceAfterFeedback()
                             }
+                        }
+
+                        if session.mode == .placement,
+                           feedback != nil,
+                           model.quizProgressCount > 0,
+                           model.quizProgressCount % 20 == 0,
+                           let livePlacementEstimate {
+                            PlacementCheckpointBanner(
+                                checkpoint: model.quizProgressCount / 20,
+                                totalCheckpoints: max(1, session.questions.count / 20),
+                                estimate: livePlacementEstimate
+                            )
                         }
 
                         HStack(spacing: 16) {
@@ -523,7 +591,7 @@ struct SummaryView: View {
     var body: some View {
         let summary = model.latestSummary
         let placementPlan = summary?.mode == .placement
-            ? summary.map { PlacementPlanner.plan(correctAnswers: $0.correctAnswers, totalQuestions: $0.totalQuestions, weakTopics: $0.weakTopics) }
+            ? summary.map { PlacementPlanner.plan(correctAnswers: $0.correctAnswers, totalQuestions: $0.totalQuestions, weakTopics: $0.weakTopics, topicInsights: $0.placementTopicInsights ?? []) }
             : nil
 
         ScrollView {
@@ -598,6 +666,10 @@ struct SummaryView: View {
                                         }
                                     }
                                 }
+                            }
+
+                            if !placementPlan.topicInsights.isEmpty {
+                                PlacementTopicInsightChart(insights: placementPlan.topicInsights)
                             }
 
                             PlacementActionList(actions: placementPlan.nextWeekActions)
@@ -940,6 +1012,128 @@ struct PlacementActionList: View {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(AppPalette.border, lineWidth: 1.1)
         )
+    }
+}
+
+struct PlacementTopicInsightChart: View {
+    let insights: [PlacementTopicInsight]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Topic performance")
+                .font(.system(size: 18, weight: .bold, design: .default))
+                .foregroundStyle(AppPalette.muted)
+
+            VStack(spacing: 10) {
+                ForEach(insights.prefix(4), id: \.topic) { insight in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(insight.topic.displayName)
+                                .font(.system(size: 17, weight: .semibold, design: .default))
+                                .foregroundStyle(AppPalette.ink)
+                            Spacer()
+                            Text("\(insight.accuracyPercent)%")
+                                .font(.system(size: 16, weight: .bold, design: .default))
+                                .foregroundStyle(AppPalette.terracotta)
+                        }
+                        GeometryReader { proxy in
+                            ZStack(alignment: .leading) {
+                                RoundedRectangle(cornerRadius: 999, style: .continuous)
+                                    .fill(AppPalette.border.opacity(0.4))
+                                RoundedRectangle(cornerRadius: 999, style: .continuous)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [AppPalette.terracotta, AppPalette.olive],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
+                                    )
+                                    .frame(width: proxy.size.width * CGFloat(Double(insight.accuracyPercent) / 100.0))
+                            }
+                        }
+                        .frame(height: 10)
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.72))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(AppPalette.border, lineWidth: 1.1)
+        )
+    }
+}
+
+struct PlacementMilestoneTrack: View {
+    let progress: Int
+    let totalQuestions: Int
+
+    var body: some View {
+        let milestones = stride(from: 20, through: totalQuestions, by: 20).map { $0 }
+
+        return HStack(spacing: 10) {
+            ForEach(milestones, id: \.self) { milestone in
+                VStack(spacing: 8) {
+                    ZStack {
+                        Circle()
+                            .fill(progress >= milestone ? AppPalette.terracotta : AppPalette.border.opacity(0.4))
+                            .frame(width: 28, height: 28)
+                        Text("\(milestone / 20)")
+                            .font(.system(size: 13, weight: .bold, design: .default))
+                            .foregroundStyle(progress >= milestone ? Color.white : AppPalette.muted)
+                    }
+                    Text("\(milestone)")
+                        .font(.system(size: 12, weight: .semibold, design: .default))
+                        .foregroundStyle(AppPalette.muted)
+                }
+
+                if milestone != milestones.last {
+                    Rectangle()
+                        .fill(progress > milestone ? AppPalette.terracotta.opacity(0.7) : AppPalette.border.opacity(0.5))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 2)
+                }
+            }
+        }
+    }
+}
+
+struct PlacementCheckpointBanner: View {
+    let checkpoint: Int
+    let totalCheckpoints: Int
+    let estimate: PlacementEstimate
+
+    var body: some View {
+        SurfaceCard {
+            HStack(alignment: .center, spacing: 18) {
+                ZStack {
+                    Circle()
+                        .fill(AppPalette.terracotta.opacity(0.14))
+                        .frame(width: 68, height: 68)
+                    Image(systemName: "flag.checkered.2.crossed")
+                        .font(.system(size: 30, weight: .bold))
+                        .foregroundStyle(AppPalette.terracotta)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Checkpoint \(checkpoint) of \(totalCheckpoints)")
+                        .font(.system(size: 30, weight: .bold, design: .serif))
+                        .foregroundStyle(AppPalette.ink)
+                    Text("Projected vocabulary now: \(estimate.estimatedVocabularySize) / \(estimate.benchmarkVocabularySize)")
+                        .font(.system(size: 19, weight: .medium, design: .default))
+                        .foregroundStyle(AppPalette.muted)
+                }
+
+                Spacer()
+
+                PillLabel(text: estimate.placementBand.uppercased(), tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
+            }
+        }
     }
 }
 

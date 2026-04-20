@@ -37,7 +37,7 @@ enum SessionPlanner {
         return buildQuestions(from: Array(ordered.prefix(count)), allWords: words)
     }
 
-    static func missionQuestions(words: [VocabularyWord], data: AppStoreData, count: Int = 15) -> [PersistedQuestion] {
+    static func missionQuestions(words: [VocabularyWord], data: AppStoreData, count: Int = 15, preferredTopics: [WordTopic] = []) -> [PersistedQuestion] {
         let failed = wordsMatching(words: words, data: data) { progress in
             progress.reviewPriority > 0
         }
@@ -53,12 +53,26 @@ enum SessionPlanner {
         let reviewing = wordsMatching(words: words, data: data) { progress in
             !progress.isMastered && progress.reviewPriority == 0 && progress.totalAttempts > 0
         }
-        .sorted { lhs, rhs in lhs.english < rhs.english }
+        .sorted { lhs, rhs in
+            let leftScore = topicPriority(for: lhs.topic, preferredTopics: preferredTopics)
+            let rightScore = topicPriority(for: rhs.topic, preferredTopics: preferredTopics)
+            if leftScore != rightScore {
+                return leftScore < rightScore
+            }
+            return lhs.english < rhs.english
+        }
 
         let newWords = wordsMatching(words: words, data: data) { progress in
             progress.totalAttempts == 0
         }
-        .sorted { lhs, rhs in lhs.english < rhs.english }
+        .sorted { lhs, rhs in
+            let leftScore = topicPriority(for: lhs.topic, preferredTopics: preferredTopics)
+            let rightScore = topicPriority(for: rhs.topic, preferredTopics: preferredTopics)
+            if leftScore != rightScore {
+                return leftScore < rightScore
+            }
+            return lhs.english < rhs.english
+        }
 
         let ordered = (failed + reviewing + newWords).uniqued()
         let chosen = Array(ordered.prefix(max(1, count)))
@@ -88,6 +102,10 @@ enum SessionPlanner {
 
     private static func progress(for wordID: String, in data: AppStoreData) -> WordProgress {
         data.progressByWordID[wordID] ?? .fresh(for: wordID)
+    }
+
+    private static func topicPriority(for topic: WordTopic, preferredTopics: [WordTopic]) -> Int {
+        preferredTopics.firstIndex(of: topic) ?? Int.max
     }
 
     private static func buildQuestions(from selected: [VocabularyWord], allWords: [VocabularyWord]) -> [PersistedQuestion] {
@@ -125,13 +143,15 @@ enum FeedbackGenerator {
             .map(\.key)
 
         if session.mode == .placement {
+            let topicInsights = PlacementPlanner.topicInsights(from: session.attempts)
             let studyPlan = PlacementPlanner.plan(
                 correctAnswers: session.correctAnswers,
                 totalQuestions: session.questions.count,
-                weakTopics: Array(weakTopics.prefix(3))
+                weakTopics: Array(weakTopics.prefix(3)),
+                topicInsights: topicInsights
             )
             let weakTopicText = studyPlan.focusTopics.first?.displayName.lowercased() ?? "mixed PET topics"
-            let body = "You answered \(session.correctAnswers) of \(session.questions.count) correctly. Your estimated PET-style vocabulary is about \(studyPlan.estimate.estimatedVocabularySize) words out of a 3,000-word benchmark. \(studyPlan.estimate.guidance)"
+            let body = "You answered \(session.correctAnswers) of \(session.questions.count) correctly. Your estimated PET-style vocabulary is about \(studyPlan.estimate.estimatedVocabularySize) words out of a 3,000-word benchmark, leaving about \(studyPlan.estimate.remainingToBenchmark) words to close the gap. \(studyPlan.estimate.guidance)"
 
             return FeedbackSummary(
                 headline: "Placement complete",
@@ -236,9 +256,33 @@ enum PlacementEstimator {
 }
 
 enum PlacementPlanner {
-    static func plan(correctAnswers: Int, totalQuestions: Int, weakTopics: [WordTopic]) -> PlacementStudyPlan {
+    static func topicInsights(from attempts: [AttemptRecord]) -> [PlacementTopicInsight] {
+        Dictionary(grouping: attempts, by: \.topic)
+            .map { topic, groupedAttempts in
+                PlacementTopicInsight(
+                    topic: topic,
+                    correctAnswers: groupedAttempts.filter(\.isCorrect).count,
+                    totalQuestions: groupedAttempts.count
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.accuracyPercent != rhs.accuracyPercent {
+                    return lhs.accuracyPercent < rhs.accuracyPercent
+                }
+                return lhs.totalQuestions > rhs.totalQuestions
+            }
+    }
+
+    static func plan(
+        correctAnswers: Int,
+        totalQuestions: Int,
+        weakTopics: [WordTopic],
+        topicInsights: [PlacementTopicInsight] = []
+    ) -> PlacementStudyPlan {
         let estimate = PlacementEstimator.estimate(correctAnswers: correctAnswers, totalQuestions: totalQuestions)
-        let focusTopics = Array(weakTopics.prefix(3))
+        let focusTopics = topicInsights.isEmpty
+            ? Array(weakTopics.prefix(3))
+            : Array(topicInsights.prefix(3).map(\.topic))
         let focusTopicText: String
         if focusTopics.isEmpty {
             focusTopicText = "mixed PET topics"
@@ -257,7 +301,42 @@ enum PlacementPlanner {
         return PlacementStudyPlan(
             estimate: estimate,
             focusTopics: focusTopics,
-            nextWeekActions: nextWeekActions
+            nextWeekActions: nextWeekActions,
+            topicInsights: topicInsights
+        )
+    }
+}
+
+enum MissionPersonalizer {
+    static func plan(from studyPlan: PlacementStudyPlan?, reviewCount: Int, dailyStreak: Int) -> PersonalizedMissionPlan? {
+        guard let studyPlan else { return nil }
+
+        let focusTopics = studyPlan.focusTopics
+        let topicLabel: String
+        if focusTopics.isEmpty {
+            topicLabel = "Mixed PET"
+        } else if focusTopics.count == 1 {
+            topicLabel = focusTopics[0].displayName
+        } else {
+            topicLabel = focusTopics.prefix(2).map(\.displayName).joined(separator: " + ")
+        }
+
+        let questionCount = min(max(studyPlan.estimate.dailyGoalWords, 10), 20)
+        let subtitle: String
+        if reviewCount > 0 {
+            subtitle = "Blend failed words with \(topicLabel.lowercased()) review so your weak areas improve faster."
+        } else if dailyStreak > 1 {
+            subtitle = "Keep your streak alive with a focused \(topicLabel.lowercased()) mission tuned from your placement test."
+        } else {
+            subtitle = "Start a focused \(topicLabel.lowercased()) mission based on your 100-word placement result."
+        }
+
+        return PersonalizedMissionPlan(
+            title: "\(topicLabel) mission",
+            subtitle: subtitle,
+            recommendedQuestionCount: questionCount,
+            focusTopics: focusTopics,
+            rewardText: "Finish \(questionCount) questions to chip away at the \(studyPlan.estimate.remainingToBenchmark)-word gap."
         )
     }
 }

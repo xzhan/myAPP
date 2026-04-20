@@ -27,6 +27,21 @@ struct PETVocabularyTrainerTests {
         #expect(plan.nextWeekActions[2].contains("travel, school"))
     }
 
+    @Test func placementTopicInsightsSortWeakestTopicsFirst() {
+        let attempts = [
+            AttemptRecord(sessionID: "s", wordID: "a1", selectedChoice: "错", correctChoice: "对", isCorrect: false, topic: .travel),
+            AttemptRecord(sessionID: "s", wordID: "a2", selectedChoice: "错", correctChoice: "对", isCorrect: false, topic: .travel),
+            AttemptRecord(sessionID: "s", wordID: "b1", selectedChoice: "对", correctChoice: "对", isCorrect: true, topic: .school),
+            AttemptRecord(sessionID: "s", wordID: "b2", selectedChoice: "错", correctChoice: "对", isCorrect: false, topic: .school)
+        ]
+
+        let insights = PlacementPlanner.topicInsights(from: attempts)
+
+        #expect(insights.first?.topic == .travel)
+        #expect(insights.first?.accuracyPercent == 0)
+        #expect(insights.last?.topic == .school)
+    }
+
     @MainActor
     @Test func appModelShowsFeedbackBeforeAdvancingToNextQuestion() {
         let url = FileManager.default.temporaryDirectory
@@ -179,6 +194,28 @@ struct PETVocabularyTrainerTests {
 
         #expect(questions.count == 3)
         #expect(questions.first?.wordID == "failed")
+    }
+
+    @Test func missionPlannerUsesPreferredTopicsForNonFailedWords() {
+        let words = [
+            VocabularyWord(id: "travel-1", english: "airport", primaryChinese: "机场", topic: .travel),
+            VocabularyWord(id: "travel-2", english: "hotel", primaryChinese: "酒店", topic: .travel),
+            VocabularyWord(id: "school-1", english: "teacher", primaryChinese: "老师", topic: .school),
+            VocabularyWord(id: "school-2", english: "lesson", primaryChinese: "课程", topic: .school),
+            VocabularyWord(id: "food-1", english: "bread", primaryChinese: "面包", topic: .food)
+        ]
+        var data = AppStoreData()
+        words.forEach { data.progressByWordID[$0.id] = .fresh(for: $0.id) }
+
+        let questions = SessionPlanner.missionQuestions(
+            words: words,
+            data: data,
+            count: 3,
+            preferredTopics: [.travel]
+        )
+
+        #expect(questions.count == 3)
+        #expect(questions.prefix(2).allSatisfy { ["travel-1", "travel-2"].contains($0.wordID) })
     }
 
     @Test func feedbackGeneratorHighlightsWeakTopic() {
