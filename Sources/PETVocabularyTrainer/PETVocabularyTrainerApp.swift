@@ -292,6 +292,37 @@ struct DashboardView: View {
                     )
                 }
 
+                if let estimate = model.latestPlacementEstimate {
+                    SurfaceCard(title: "Latest Placement Estimate") {
+                        HStack(alignment: .top, spacing: 24) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Estimated PET-style vocabulary")
+                                    .font(.system(size: 18, weight: .bold, design: .default))
+                                    .foregroundStyle(AppPalette.muted)
+                                Text("\(estimate.estimatedVocabularySize) / \(estimate.benchmarkVocabularySize)")
+                                    .font(.system(size: 56, weight: .bold, design: .serif))
+                                    .foregroundStyle(AppPalette.ink)
+                                Text(estimate.guidance)
+                                    .font(.system(size: 20, weight: .medium, design: .default))
+                                    .foregroundStyle(AppPalette.muted)
+                            }
+
+                            Spacer()
+
+                            VStack(alignment: .trailing, spacing: 10) {
+                                PillLabel(text: estimate.placementBand.uppercased(), tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
+                                if let summary = model.latestPlacementSummary {
+                                    Text("From \(summary.correctAnswers) / \(summary.totalQuestions) on your latest 100-word placement")
+                                        .font(.system(size: 16, weight: .medium, design: .default))
+                                        .foregroundStyle(AppPalette.muted)
+                                        .multilineTextAlignment(.trailing)
+                                        .frame(maxWidth: 280, alignment: .trailing)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if !stats.focusTopics.isEmpty {
                     SurfaceCard(title: "Focus Topics") {
                         HStack(spacing: 10) {
@@ -459,6 +490,9 @@ struct SummaryView: View {
 
     var body: some View {
         let summary = model.latestSummary
+        let placementEstimate = summary?.mode == .placement
+            ? summary.map { PlacementEstimator.estimate(correctAnswers: $0.correctAnswers, totalQuestions: $0.totalQuestions) }
+            : nil
 
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -472,6 +506,37 @@ struct SummaryView: View {
                             .foregroundStyle(AppPalette.muted)
                         if let summary {
                             PillLabel(text: summary.recommendedMissionTitle, tint: AppPalette.blue, fill: AppPalette.blueSoft)
+                        }
+                    }
+                }
+
+                if let placementEstimate {
+                    SurfaceCard(title: "Placement Result") {
+                        HStack(alignment: .top, spacing: 24) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Estimated PET-style vocabulary")
+                                    .font(.system(size: 18, weight: .bold, design: .default))
+                                    .foregroundStyle(AppPalette.muted)
+                                Text("\(placementEstimate.estimatedVocabularySize) / \(placementEstimate.benchmarkVocabularySize)")
+                                    .font(.system(size: 70, weight: .bold, design: .serif))
+                                    .foregroundStyle(AppPalette.ink)
+                                Text(placementEstimate.guidance)
+                                    .font(.system(size: 22, weight: .medium, design: .default))
+                                    .foregroundStyle(AppPalette.muted)
+                            }
+
+                            Spacer()
+
+                            VStack(alignment: .trailing, spacing: 14) {
+                                PillLabel(text: placementEstimate.placementBand.uppercased(), tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
+                                MetricTile(
+                                    title: "Benchmark",
+                                    value: "3,000",
+                                    caption: "PET-style words in this estimate range",
+                                    tint: AppPalette.olive
+                                )
+                                .frame(width: 250)
+                            }
                         }
                     }
                 }
@@ -493,7 +558,13 @@ struct SummaryView: View {
                 }
 
                 HStack(spacing: 14) {
-                    Button("RETRY FAILED WORDS") { model.startFailedReview() }
+                    Button(summary?.mode == .placement ? "START DAILY CHALLENGE" : "RETRY FAILED WORDS") {
+                        if summary?.mode == .placement {
+                            model.startMission()
+                        } else {
+                            model.startFailedReview()
+                        }
+                    }
                         .buttonStyle(HeroButtonStyle(kind: .filled))
                         .frame(maxWidth: 420)
                     Button("BACK TO HOME") { model.openDashboard() }

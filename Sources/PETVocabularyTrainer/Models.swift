@@ -237,6 +237,13 @@ struct DashboardStats: Hashable {
     let focusTopics: [WordTopic]
 }
 
+struct PlacementEstimate: Hashable {
+    let estimatedVocabularySize: Int
+    let benchmarkVocabularySize: Int
+    let placementBand: String
+    let guidance: String
+}
+
 struct QuizAnswerFeedback: Hashable {
     let selectedChoice: String
     let correctChoice: String

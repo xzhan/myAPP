@@ -124,6 +124,22 @@ enum FeedbackGenerator {
             .sorted { lhs, rhs in lhs.value.count > rhs.value.count }
             .map(\.key)
 
+        if session.mode == .placement {
+            let estimate = PlacementEstimator.estimate(
+                correctAnswers: session.correctAnswers,
+                totalQuestions: session.questions.count
+            )
+            let weakTopicText = weakTopics.first?.displayName.lowercased() ?? "mixed PET topics"
+            let body = "You answered \(session.correctAnswers) of \(session.questions.count) correctly. Your estimated PET-style vocabulary is about \(estimate.estimatedVocabularySize) words out of a 3,000-word benchmark. \(estimate.guidance)"
+
+            return FeedbackSummary(
+                headline: "Placement complete",
+                body: body,
+                weakTopics: Array(weakTopics.prefix(2)),
+                recommendedMissionTitle: "Start daily review for \(weakTopicText)"
+            )
+        }
+
         let masteredCount = session.newlyMasteredWordIDs.count
         let wordLabel = masteredCount == 1 ? "word" : "words"
         let headline: String
@@ -164,6 +180,44 @@ enum FeedbackGenerator {
             body: body,
             weakTopics: Array(weakTopics.prefix(2)),
             recommendedMissionTitle: recommendedMission
+        )
+    }
+}
+
+enum PlacementEstimator {
+    static let benchmarkVocabularySize = 3_000
+
+    static func estimate(correctAnswers: Int, totalQuestions: Int) -> PlacementEstimate {
+        let ratio = max(0, min(Double(correctAnswers) / Double(max(totalQuestions, 1)), 1.0))
+        let rawEstimate = Int((ratio * Double(benchmarkVocabularySize)).rounded())
+        let roundedEstimate = Int((Double(rawEstimate) / 50.0).rounded() * 50.0)
+
+        let placementBand: String
+        let guidance: String
+
+        switch roundedEstimate {
+        case ..<1_200:
+            placementBand = "Foundation Builder"
+            guidance = "Focus on high-frequency review first and use daily missions to build your base."
+        case ..<1_800:
+            placementBand = "Emerging PET"
+            guidance = "You already have a base. Daily missions should grow this quickly, especially on missed words."
+        case ..<2_400:
+            placementBand = "PET Developing"
+            guidance = "You are entering a strong PET range. Keep pushing weak topics and failed-word review."
+        case ..<2_800:
+            placementBand = "PET Strong"
+            guidance = "You already know a solid PET-style core. Now focus on accuracy and finishing weaker topic groups."
+        default:
+            placementBand = "PET Ready"
+            guidance = "You are performing near the top of this 3,000-word benchmark. Use missions to sharpen consistency."
+        }
+
+        return PlacementEstimate(
+            estimatedVocabularySize: roundedEstimate,
+            benchmarkVocabularySize: benchmarkVocabularySize,
+            placementBand: placementBand,
+            guidance: guidance
         )
     }
 }

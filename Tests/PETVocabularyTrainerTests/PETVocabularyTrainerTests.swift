@@ -3,6 +3,14 @@ import Testing
 @testable import PETVocabularyTrainer
 
 struct PETVocabularyTrainerTests {
+    @Test func placementEstimatorConvertsPlacementScoreIntoVocabularyBand() {
+        let estimate = PlacementEstimator.estimate(correctAnswers: 80, totalQuestions: 100)
+
+        #expect(estimate.estimatedVocabularySize == 2_400)
+        #expect(estimate.benchmarkVocabularySize == 3_000)
+        #expect(estimate.placementBand == "PET Strong")
+    }
+
     @MainActor
     @Test func appModelShowsFeedbackBeforeAdvancingToNextQuestion() {
         let url = FileManager.default.temporaryDirectory
@@ -182,6 +190,28 @@ struct PETVocabularyTrainerTests {
         #expect(summary.weakTopics == [.school])
         #expect(summary.body.contains("mastered 1 new PET word"))
         #expect(summary.recommendedMissionTitle.contains("school"))
+    }
+
+    @Test func placementSummaryIncludesEstimatedVocabularyLanguage() {
+        let session = ActiveSession(
+            mode: .placement,
+            questions: [
+                PersistedQuestion(wordID: "school", choices: ["借入", "归还", "老师", "学校"]),
+                PersistedQuestion(wordID: "places", choices: ["电影院", "车站", "医院", "旅程"])
+            ],
+            currentIndex: 2,
+            correctAnswers: 1,
+            attempts: [
+                AttemptRecord(sessionID: "s1", wordID: "school", selectedChoice: "借入", correctChoice: "借入", isCorrect: true, topic: .school),
+                AttemptRecord(sessionID: "s1", wordID: "places", selectedChoice: "车站", correctChoice: "电影院", isCorrect: false, topic: .places)
+            ],
+            newlyMasteredWordIDs: []
+        )
+
+        let summary = FeedbackGenerator.makeSummary(from: session, wordsByID: [:])
+
+        #expect(summary.headline == "Placement complete")
+        #expect(summary.body.contains("estimated PET-style vocabulary"))
     }
 
     @Test func progressAnalyticsSummarizesPointsFocusTopicsAndRank() {

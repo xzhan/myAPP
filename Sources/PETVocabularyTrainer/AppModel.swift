@@ -119,6 +119,18 @@ final class AppModel {
         latestSummary?.pointsEarned ?? 0
     }
 
+    var latestPlacementSummary: SessionSummary? {
+        sessionHistory.first { $0.mode == .placement }
+    }
+
+    var latestPlacementEstimate: PlacementEstimate? {
+        guard let summary = latestPlacementSummary else { return nil }
+        return PlacementEstimator.estimate(
+            correctAnswers: summary.correctAnswers,
+            totalQuestions: summary.totalQuestions
+        )
+    }
+
     var reviewWords: [(word: VocabularyWord, progress: WordProgress)] {
         words.compactMap { word in
             guard let progress = data.progressByWordID[word.id], progress.reviewPriority > 0 else {
