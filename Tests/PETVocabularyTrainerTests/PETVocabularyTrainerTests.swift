@@ -16,6 +16,16 @@ struct PETVocabularyTrainerTests {
         #expect(topicCounts.values.allSatisfy { $0 >= 8 })
     }
 
+    @Test func generatedQuestionsContainVisibleChoices() throws {
+        let words = try SeedWordLoader.loadWords()
+        let questions = SessionPlanner.placementQuestions(words: words, data: AppStoreData(), count: 12)
+
+        #expect(questions.count == 12)
+        #expect(questions.allSatisfy { $0.choices.count == 4 })
+        #expect(questions.allSatisfy { Set($0.choices).count == 4 })
+        #expect(questions.allSatisfy { $0.choices.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } })
+    }
+
     @Test func masteryEngineMarksWordMasteredAfterThreeCorrectAnswers() {
         var progress = WordProgress.fresh(for: "pet-borrow")
 

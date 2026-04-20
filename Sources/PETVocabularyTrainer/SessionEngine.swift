@@ -104,8 +104,16 @@ enum SessionPlanner {
         let otherTopics = allWords
             .filter { $0.id != word.id && $0.topic != word.topic }
             .map(\.primaryChinese)
-        let distractors = Array((sameTopic + otherTopics).uniqued().prefix(3))
-        return ([word.primaryChinese] + distractors).shuffled()
+        let cleanedChoices = ([word.primaryChinese] + sameTopic + otherTopics)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .uniqued()
+
+        if cleanedChoices.count >= 4 {
+            return Array(cleanedChoices.prefix(4)).shuffled()
+        }
+
+        return cleanedChoices.shuffled()
     }
 }
 

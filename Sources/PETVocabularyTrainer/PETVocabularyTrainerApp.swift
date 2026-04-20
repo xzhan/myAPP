@@ -1,5 +1,22 @@
 import SwiftUI
 
+enum AppPalette {
+    static let window = Color(red: 0.93, green: 0.93, blue: 0.91)
+    static let canvas = Color(red: 0.98, green: 0.97, blue: 0.95)
+    static let panel = Color(red: 1.00, green: 0.99, blue: 0.98)
+    static let border = Color(red: 0.86, green: 0.84, blue: 0.80)
+    static let line = Color(red: 0.86, green: 0.84, blue: 0.81)
+    static let ink = Color(red: 0.31, green: 0.30, blue: 0.27)
+    static let muted = Color(red: 0.55, green: 0.50, blue: 0.47)
+    static let terracotta = Color(red: 0.82, green: 0.49, blue: 0.36)
+    static let olive = Color(red: 0.41, green: 0.40, blue: 0.28)
+    static let oliveSoft = Color(red: 0.92, green: 0.91, blue: 0.86)
+    static let blue = Color(red: 0.29, green: 0.43, blue: 0.65)
+    static let blueSoft = Color(red: 0.90, green: 0.94, blue: 0.98)
+    static let ghost = Color(red: 0.91, green: 0.90, blue: 0.86)
+    static let success = Color(red: 0.25, green: 0.54, blue: 0.39)
+}
+
 @main
 struct PETVocabularyTrainerApp: App {
     @State private var model = AppModel()
@@ -8,11 +25,12 @@ struct PETVocabularyTrainerApp: App {
         WindowGroup {
             RootView()
                 .environment(model)
+                .preferredColorScheme(.light)
                 .task {
                     model.bootstrap()
                 }
         }
-        .defaultSize(width: 1180, height: 820)
+        .defaultSize(width: 1280, height: 860)
     }
 }
 
@@ -21,25 +39,21 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color(red: 0.98, green: 0.95, blue: 0.89), Color(red: 0.90, green: 0.96, blue: 0.99)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            AppPalette.window
+                .ignoresSafeArea()
 
-            Circle()
-                .fill(Color(red: 0.97, green: 0.72, blue: 0.52).opacity(0.20))
-                .frame(width: 360, height: 360)
-                .offset(x: 430, y: -280)
-
-            Circle()
-                .fill(Color(red: 0.35, green: 0.58, blue: 0.92).opacity(0.16))
-                .frame(width: 420, height: 420)
-                .offset(x: -420, y: 300)
+            RoundedRectangle(cornerRadius: 44, style: .continuous)
+                .fill(AppPalette.canvas)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 44, style: .continuous)
+                        .stroke(AppPalette.border, lineWidth: 1.5)
+                )
+                .padding(12)
 
             content
-                .padding(20)
+                .frame(maxWidth: 1240, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.horizontal, 58)
+                .padding(.vertical, 48)
         }
         .alert("Notice", isPresented: Binding(
             get: { model.errorMessage != nil },
@@ -55,12 +69,15 @@ struct RootView: View {
     private var content: some View {
         switch model.screen {
         case .loading:
-            GlassCard {
-                VStack(spacing: 20) {
+            SurfaceCard {
+                VStack(spacing: 18) {
                     Text("Loading vocabulary...")
+                        .font(.system(size: 30, weight: .semibold, design: .serif))
+                        .foregroundStyle(AppPalette.ink)
                     ProgressView()
+                        .tint(AppPalette.olive)
                 }
-                .frame(width: 320)
+                .frame(maxWidth: 420)
             }
         case .onboarding:
             OnboardingView()
@@ -82,49 +99,102 @@ struct OnboardingView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        HStack(alignment: .top, spacing: 24) {
-            GlassCard {
-                VStack(alignment: .leading, spacing: 22) {
-                    Text("PET Vocabulary Trainer")
-                        .font(.system(size: 46, weight: .bold, design: .rounded))
-                    Text("Measure how many PET words you already know, then turn daily review into a game-like practice loop with missions, streaks, and coach feedback.")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+        let hasPlacement = model.data.hasCompletedPlacement
+        let primaryTitle = hasPlacement ? "DAILY CHALLENGE" : "100-WORD TEST"
+        let secondaryTitle = hasPlacement ? "100-WORD TEST" : "DAILY CHALLENGE"
 
-                    VStack(alignment: .leading, spacing: 14) {
-                        featureRow(icon: "chart.line.uptrend.xyaxis", text: "See exactly how many PET words you have mastered")
-                        featureRow(icon: "sparkles.rectangle.stack", text: "Start with a placement test to set your baseline")
-                        featureRow(icon: "flag.pattern.checkered", text: "Get short missions that mix new words and failed words")
-                        featureRow(icon: "person.crop.circle.badge.checkmark", text: "Receive coach-style feedback after each session")
-                    }
+        HStack(alignment: .top, spacing: 32) {
+            VStack(alignment: .leading, spacing: 28) {
+                Text("MASTERY PROGRAM")
+                    .font(.system(size: 28, weight: .bold, design: .default))
+                    .tracking(2)
+                    .foregroundStyle(AppPalette.terracotta)
 
-                    Button("Start placement test") { model.startPlacement() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
+                Text("Vocabulary Journey")
+                    .font(.system(size: 88, weight: .regular, design: .serif))
+                    .foregroundStyle(AppPalette.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Boost your skills with smart, gamified daily training")
+                    Text("or a full PET baseline diagnostic.")
                 }
-            }
+                .font(.system(size: 34, weight: .medium, design: .serif))
+                .italic()
+                .foregroundStyle(AppPalette.muted)
 
-            GlassCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    Rectangle()
+                        .fill(AppPalette.line)
+                        .frame(width: 620, height: 4)
+                    Rectangle()
+                        .fill(AppPalette.line)
+                        .frame(width: 340, height: 4)
+                }
+
                 VStack(alignment: .leading, spacing: 18) {
-                    PillLabel(text: "How it feels", tint: Color(red: 0.97, green: 0.72, blue: 0.52))
-                    Text("Daily momentum")
-                        .font(.title.bold())
-                    VStack(spacing: 14) {
-                        MetricTile(title: "Placement", value: "20 words", caption: "Quick baseline test", tint: Color(red: 0.24, green: 0.44, blue: 0.82))
-                        MetricTile(title: "Mission", value: "15 words", caption: "Short daily sprint", tint: Color(red: 0.16, green: 0.58, blue: 0.36))
-                        MetricTile(title: "Mastery", value: "3 correct", caption: "Across separate attempts", tint: Color(red: 0.82, green: 0.42, blue: 0.15))
+                    Button(primaryTitle) {
+                        if hasPlacement {
+                            model.startMission()
+                        } else {
+                            model.startPlacement()
+                        }
                     }
+                    .buttonStyle(HeroButtonStyle(kind: .filled))
+                    .frame(maxWidth: 520)
+
+                    Button {
+                        if hasPlacement {
+                            model.startPlacement()
+                        } else {
+                            model.startMission()
+                        }
+                    } label: {
+                        Label(secondaryTitle, systemImage: "trophy")
+                    }
+                    .buttonStyle(HeroButtonStyle(kind: .outlined))
+                    .frame(maxWidth: 560)
+                }
+
+                Text("Recommendation: start with the 100-word test to set your PET bar, then use daily challenges to keep failed words coming back until they are mastered.")
+                    .font(.system(size: 20, weight: .medium, design: .default))
+                    .foregroundStyle(AppPalette.muted)
+                    .frame(maxWidth: 760, alignment: .leading)
+            }
+
+            Spacer(minLength: 20)
+
+            VStack(alignment: .trailing, spacing: 18) {
+                Text(hasPlacement ? model.dashboardStats.rankTitle.uppercased() : "GO")
+                    .font(.system(size: 52, weight: .medium, design: .serif))
+                    .foregroundStyle(AppPalette.ghost.opacity(0.75))
+
+                Text(hasPlacement ? "\(model.dashboardStats.masteryPercent)%" : "GO")
+                    .font(.system(size: 250, weight: .regular, design: .serif))
+                    .foregroundStyle(AppPalette.ghost.opacity(0.78))
+                    .minimumScaleFactor(0.7)
+
+                if hasPlacement {
+                    VStack(alignment: .trailing, spacing: 14) {
+                        MetricTile(
+                            title: "Rank",
+                            value: model.dashboardStats.rankTitle,
+                            caption: "\(model.dashboardStats.masteredCount) words mastered",
+                            tint: AppPalette.terracotta
+                        )
+                        MetricTile(
+                            title: "Streak",
+                            value: "\(model.dashboardStats.dailyStreak) days",
+                            caption: "Come back daily to keep the run alive",
+                            tint: AppPalette.blue
+                        )
+                    }
+                    .frame(width: 320)
                 }
             }
-            .frame(width: 310)
+            .frame(width: 360, alignment: .trailing)
         }
-        .frame(maxWidth: 1100, maxHeight: .infinity, alignment: .center)
-    }
-
-    private func featureRow(icon: String, text: String) -> some View {
-        Label(text, systemImage: icon)
-            .font(.headline)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -135,74 +205,95 @@ struct DashboardView: View {
         let stats = model.dashboardStats
 
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                HStack(alignment: .top, spacing: 22) {
-                    GlassCard {
+            VStack(alignment: .leading, spacing: 28) {
+                HStack(alignment: .top, spacing: 32) {
+                    VStack(alignment: .leading, spacing: 24) {
+                        Text("MASTERY PROGRAM")
+                            .font(.system(size: 24, weight: .bold, design: .default))
+                            .tracking(2)
+                            .foregroundStyle(AppPalette.terracotta)
+
+                        Text("Vocabulary Journey")
+                            .font(.system(size: 78, weight: .regular, design: .serif))
+                            .foregroundStyle(AppPalette.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text(stats.missionSubtitle)
+                            .font(.system(size: 30, weight: .medium, design: .serif))
+                            .italic()
+                            .foregroundStyle(AppPalette.muted)
+                            .frame(maxWidth: 760, alignment: .leading)
+
                         VStack(alignment: .leading, spacing: 16) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Your PET progress")
-                                        .font(.system(size: 34, weight: .bold, design: .rounded))
-                                    Text("Rank: \(stats.rankTitle)")
-                                        .font(.headline)
-                                        .foregroundStyle(Color(red: 0.82, green: 0.42, blue: 0.15))
-                                }
-                                Spacer()
-                                Button("History") { model.openHistory() }
-                                Button("Needs Review") { model.openReview() }
-                            }
+                            Button("DAILY CHALLENGE") { model.startMission() }
+                                .buttonStyle(HeroButtonStyle(kind: .filled))
+                                .frame(maxWidth: 460)
 
-                            Text(stats.missionTitle)
-                                .font(.system(size: 28, weight: .bold, design: .rounded))
-                            Text(stats.missionSubtitle)
-                                .font(.body)
-                                .foregroundStyle(.secondary)
-
-                            HStack(spacing: 12) {
-                                if model.data.hasCompletedPlacement {
-                                    Button("Start mission") { model.startMission() }
-                                        .buttonStyle(.borderedProminent)
-                                    Button("Retry failed words") { model.startFailedReview() }
-                                        .disabled(stats.reviewCount == 0)
-                                } else {
-                                    Button("Take placement test") { model.startPlacement() }
-                                        .buttonStyle(.borderedProminent)
-                                }
+                            Button {
+                                model.startPlacement()
+                            } label: {
+                                Label("100-WORD TEST", systemImage: "trophy")
                             }
+                            .buttonStyle(HeroButtonStyle(kind: .outlined))
+                            .frame(maxWidth: 500)
+                        }
+
+                        HStack(spacing: 12) {
+                            Button("FAILED WORDS") { model.openReview() }
+                                .buttonStyle(SecondaryNavButtonStyle())
+                            Button("HISTORY") { model.openHistory() }
+                                .buttonStyle(SecondaryNavButtonStyle())
                         }
                     }
 
-                    GlassCard {
-                        HStack(spacing: 18) {
-                            ProgressRing(
-                                value: Double(stats.masteryPercent) / 100.0,
-                                title: "PET mastery",
-                                valueText: "\(stats.masteryPercent)%",
-                                tint: Color(red: 0.16, green: 0.58, blue: 0.36)
-                            )
+                    Spacer(minLength: 20)
 
-                            VStack(alignment: .leading, spacing: 12) {
-                                MetricTile(title: "Points", value: "\(stats.totalPoints)", caption: "Earned from correct answers + mastery", tint: Color(red: 0.97, green: 0.72, blue: 0.52))
-                                MetricTile(title: "Streak", value: "\(stats.dailyStreak) days", caption: "Keep showing up", tint: Color(red: 0.24, green: 0.44, blue: 0.82))
-                            }
-                        }
+                    VStack(alignment: .trailing, spacing: 12) {
+                        Text(stats.rankTitle.uppercased())
+                            .font(.system(size: 34, weight: .semibold, design: .serif))
+                            .foregroundStyle(AppPalette.muted)
+
+                        Text(stats.masteryPercent > 0 ? "\(stats.masteryPercent)%" : "GO")
+                            .font(.system(size: 220, weight: .regular, design: .serif))
+                            .foregroundStyle(AppPalette.ghost.opacity(0.82))
+                            .minimumScaleFactor(0.7)
+
+                        Text("\(stats.masteredCount) of \(stats.totalWordCount) words mastered")
+                            .font(.system(size: 22, weight: .medium, design: .default))
+                            .foregroundStyle(AppPalette.muted)
                     }
-                    .frame(width: 360)
+                    .frame(width: 340, alignment: .trailing)
                 }
 
-                HStack(spacing: 18) {
-                    MetricTile(title: "Mastered", value: "\(stats.masteredCount) / \(stats.totalWordCount)", caption: "Vocabulary already locked in", tint: Color(red: 0.16, green: 0.58, blue: 0.36))
-                    MetricTile(title: "Needs review", value: "\(stats.reviewCount)", caption: "Words waiting for rescue", tint: Color(red: 0.82, green: 0.42, blue: 0.15))
+                HStack(spacing: 16) {
                     MetricTile(
-                        title: "Coach note",
-                        value: model.latestSummary?.headline ?? "Ready",
-                        caption: model.latestSummary?.recommendedMissionTitle ?? "Start your next mission",
-                        tint: Color(red: 0.24, green: 0.44, blue: 0.82)
+                        title: "Mastered",
+                        value: "\(stats.masteredCount)",
+                        caption: "Words already locked in",
+                        tint: AppPalette.success
+                    )
+                    MetricTile(
+                        title: "Needs review",
+                        value: "\(stats.reviewCount)",
+                        caption: "Failed words waiting to return",
+                        tint: AppPalette.terracotta
+                    )
+                    MetricTile(
+                        title: "Points",
+                        value: "\(stats.totalPoints)",
+                        caption: "Correct answers plus mastery bonuses",
+                        tint: AppPalette.olive
+                    )
+                    MetricTile(
+                        title: "Streak",
+                        value: "\(stats.dailyStreak) days",
+                        caption: "Come back to keep momentum",
+                        tint: AppPalette.blue
                     )
                 }
 
                 if !stats.focusTopics.isEmpty {
-                    GlassCard(title: "Focus topics") {
+                    SurfaceCard(title: "Focus Topics") {
                         HStack(spacing: 10) {
                             ForEach(stats.focusTopics, id: \.self) { topic in
                                 TopicChip(topic: topic)
@@ -211,41 +302,24 @@ struct DashboardView: View {
                     }
                 }
 
-                HStack(alignment: .top, spacing: 18) {
-                    MissionActionCard(
-                        title: "Daily Sprint",
-                        subtitle: "Mix new words with unfinished review",
-                        detail: "15 fast questions",
-                        accent: Color(red: 0.24, green: 0.44, blue: 0.82),
-                        buttonTitle: "Launch sprint",
-                        action: model.startMission
-                    )
-                    MissionActionCard(
-                        title: "Review Rescue",
-                        subtitle: "Push failed words back into memory",
-                        detail: "\(max(4, min(10, stats.reviewCount))) review words",
-                        accent: Color(red: 0.82, green: 0.42, blue: 0.15),
-                        buttonTitle: "Rescue words",
-                        action: model.startFailedReview,
-                        disabled: stats.reviewCount == 0
-                    )
-                }
-
-                if let summary = model.sessionHistory.first {
-                    GlassCard(title: "Latest coach note") {
-                        VStack(alignment: .leading, spacing: 8) {
+                if let summary = model.latestSummary ?? model.sessionHistory.first {
+                    SurfaceCard(title: "Coach Feedback") {
+                        VStack(alignment: .leading, spacing: 10) {
                             Text(summary.headline)
-                                .font(.title3.bold())
+                                .font(.system(size: 30, weight: .bold, design: .serif))
+                                .foregroundStyle(AppPalette.ink)
                             Text(summary.body)
-                                .foregroundStyle(.secondary)
-                            Text("+\(summary.pointsEarned) points")
-                                .font(.headline)
-                                .foregroundStyle(Color(red: 0.82, green: 0.42, blue: 0.15))
+                                .font(.system(size: 22, weight: .medium, design: .default))
+                                .foregroundStyle(AppPalette.muted)
+                            HStack(spacing: 14) {
+                                PillLabel(text: summary.recommendedMissionTitle, tint: AppPalette.blue, fill: AppPalette.blueSoft)
+                                PillLabel(text: "+\(summary.pointsEarned) points", tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
+                            }
                         }
                     }
                 }
             }
-            .padding(6)
+            .padding(.vertical, 6)
         }
     }
 }
@@ -257,83 +331,85 @@ struct QuizView: View {
         if let session = model.currentSession,
            let word = model.currentQuestionWord {
             let progress = model.currentWordProgress ?? .fresh(for: word.id)
-            let accent = session.mode == .failedReview ? Color(red: 0.82, green: 0.42, blue: 0.15) : Color(red: 0.24, green: 0.44, blue: 0.82)
+            let accent = session.mode == .failedReview ? AppPalette.terracotta : AppPalette.olive
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    HStack(spacing: 10) {
-                        PillLabel(text: session.mode.title, tint: accent)
-                        PillLabel(text: "Accuracy \(model.currentAccuracyPercent)%", tint: Color(red: 0.16, green: 0.58, blue: 0.36))
-                        PillLabel(text: "Streak \(progress.currentCorrectStreak)/3", tint: Color(red: 0.97, green: 0.72, blue: 0.52))
+                VStack(alignment: .leading, spacing: 24) {
+                    HStack {
+                        Text("QUESTION \(model.currentQuestionNumber) / \(session.questions.count)")
+                            .font(.system(size: 22, weight: .bold, design: .default))
+                            .tracking(1.2)
+                            .foregroundStyle(AppPalette.terracotta)
                         Spacer()
-                        Text("\(model.currentQuestionNumber) / \(session.questions.count)")
-                            .font(.headline)
+                        PillLabel(text: session.mode.title.uppercased(), tint: accent, fill: AppPalette.oliveSoft)
                     }
 
                     ProgressView(value: Double(session.currentIndex), total: Double(session.questions.count))
                         .tint(accent)
+                        .scaleEffect(x: 1, y: 1.8, anchor: .center)
 
-                    GlassCard {
-                        VStack(alignment: .leading, spacing: 14) {
-                            HStack {
+                    SurfaceCard {
+                        HStack(alignment: .top, spacing: 24) {
+                            VStack(alignment: .leading, spacing: 14) {
                                 TopicChip(topic: word.topic)
-                                Spacer()
-                                Text("Current score: \(session.correctAnswers)")
-                                    .foregroundStyle(.secondary)
+
+                                Text(word.english)
+                                    .font(.system(size: 88, weight: .regular, design: .serif))
+                                    .foregroundStyle(AppPalette.ink)
+
+                                Text("Choose the correct Chinese meaning. A wrong answer resets this word’s streak and pushes it back into review.")
+                                    .font(.system(size: 26, weight: .medium, design: .serif))
+                                    .italic()
+                                    .foregroundStyle(AppPalette.muted)
+                                    .frame(maxWidth: 760, alignment: .leading)
                             }
-                            Text(word.english)
-                                .font(.system(size: 60, weight: .bold, design: .rounded))
-                            Text("Choose the correct Chinese meaning. Wrong answers reset this word’s mastery streak and push it back into review.")
-                                .font(.title3)
-                                .foregroundStyle(.secondary)
+
+                            Spacer()
+
+                            VStack(alignment: .trailing, spacing: 12) {
+                                MetricTile(title: "Accuracy", value: "\(model.currentAccuracyPercent)%", caption: "Current session", tint: AppPalette.blue)
+                                    .frame(width: 230)
+                                MetricTile(title: "Streak", value: "\(progress.currentCorrectStreak) / 3", caption: "Needed for mastery", tint: accent)
+                                    .frame(width: 230)
+                            }
                         }
                     }
 
                     VStack(spacing: 14) {
                         ForEach(Array(model.currentQuestionChoices.enumerated()), id: \.offset) { index, choice in
-                            Button {
+                            ChoiceButton(
+                                letter: String(UnicodeScalar(65 + index)!),
+                                text: displayText(for: choice),
+                                accent: accent
+                            ) {
                                 model.submit(choice: choice)
-                            } label: {
-                                HStack(spacing: 16) {
-                                    ZStack {
-                                        Circle()
-                                            .fill(accent.opacity(0.16))
-                                            .frame(width: 40, height: 40)
-                                        Text(String(UnicodeScalar(65 + index)!))
-                                            .font(.headline.bold())
-                                            .foregroundStyle(accent)
-                                    }
-                                    Text(choice)
-                                        .font(.title3.weight(.semibold))
-                                        .foregroundStyle(.primary)
-                                    Spacer()
-                                }
-                                .padding(.vertical, 18)
-                                .padding(.horizontal, 18)
                             }
-                            .buttonStyle(.plain)
-                            .background(.white.opacity(0.84))
-                            .clipShape(RoundedRectangle(cornerRadius: 22))
                         }
                     }
 
-                    GlassCard(title: "Word goal") {
-                        HStack(spacing: 18) {
-                            MetricTile(title: "Correct streak", value: "\(progress.currentCorrectStreak) / 3", caption: "Needed to mark this word mastered", tint: accent)
-                            MetricTile(title: "Errors", value: "\(progress.totalIncorrect)", caption: "Wrong answers bring the word back", tint: Color(red: 0.82, green: 0.42, blue: 0.15))
-                        }
+                    HStack(spacing: 16) {
+                        MetricTile(title: "Correct", value: "\(session.correctAnswers)", caption: "Score in this mission", tint: AppPalette.success)
+                        MetricTile(title: "Mistakes", value: "\(progress.totalIncorrect)", caption: "This word has come back this many times", tint: AppPalette.terracotta)
                     }
                 }
-                .padding(6)
+                .padding(.vertical, 6)
             }
         } else {
-            GlassCard {
-                VStack(spacing: 20) {
+            SurfaceCard {
+                VStack(spacing: 18) {
                     Text("Preparing session...")
+                        .font(.system(size: 32, weight: .semibold, design: .serif))
+                        .foregroundStyle(AppPalette.ink)
                     ProgressView()
+                        .tint(AppPalette.olive)
                 }
             }
         }
+    }
+
+    private func displayText(for choice: String) -> String {
+        let trimmed = choice.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Option unavailable" : trimmed
     }
 }
 
@@ -344,30 +420,29 @@ struct SummaryView: View {
         let summary = model.latestSummary
 
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                GlassCard {
+            VStack(alignment: .leading, spacing: 24) {
+                SurfaceCard {
                     VStack(alignment: .leading, spacing: 12) {
                         Text(summary?.headline ?? "Session complete")
-                            .font(.system(size: 42, weight: .bold, design: .rounded))
+                            .font(.system(size: 54, weight: .regular, design: .serif))
+                            .foregroundStyle(AppPalette.ink)
                         Text(summary?.body ?? "Your session has been recorded locally.")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 24, weight: .medium, design: .default))
+                            .foregroundStyle(AppPalette.muted)
                         if let summary {
-                            Label(summary.recommendedMissionTitle, systemImage: "target")
-                                .font(.headline)
-                                .foregroundStyle(Color(red: 0.24, green: 0.44, blue: 0.82))
+                            PillLabel(text: summary.recommendedMissionTitle, tint: AppPalette.blue, fill: AppPalette.blueSoft)
                         }
                     }
                 }
 
-                HStack(spacing: 18) {
-                    MetricTile(title: "Accuracy", value: "\(summary?.accuracyPercent ?? 0)%", caption: "Correct answers this session", tint: Color(red: 0.24, green: 0.44, blue: 0.82))
-                    MetricTile(title: "Points", value: "+\(model.latestPointsEarned)", caption: "Added to your total score", tint: Color(red: 0.97, green: 0.72, blue: 0.52))
-                    MetricTile(title: "New mastery", value: "\(summary?.newlyMasteredCount ?? 0)", caption: "Words promoted to mastered", tint: Color(red: 0.16, green: 0.58, blue: 0.36))
+                HStack(spacing: 16) {
+                    MetricTile(title: "Accuracy", value: "\(summary?.accuracyPercent ?? 0)%", caption: "Correct answers this session", tint: AppPalette.blue)
+                    MetricTile(title: "Points", value: "+\(model.latestPointsEarned)", caption: "Added to your running total", tint: AppPalette.terracotta)
+                    MetricTile(title: "Mastered", value: "\(summary?.newlyMasteredCount ?? 0)", caption: "New words promoted this round", tint: AppPalette.success)
                 }
 
                 if let summary, !summary.weakTopics.isEmpty {
-                    GlassCard(title: "Topics to revisit") {
+                    SurfaceCard(title: "Topics To Revisit") {
                         HStack(spacing: 10) {
                             ForEach(summary.weakTopics, id: \.self) { topic in
                                 TopicChip(topic: topic)
@@ -376,13 +451,16 @@ struct SummaryView: View {
                     }
                 }
 
-                HStack(spacing: 12) {
-                    Button("Retry failed words") { model.startFailedReview() }
-                        .buttonStyle(.borderedProminent)
-                    Button("Back to dashboard") { model.openDashboard() }
+                HStack(spacing: 14) {
+                    Button("RETRY FAILED WORDS") { model.startFailedReview() }
+                        .buttonStyle(HeroButtonStyle(kind: .filled))
+                        .frame(maxWidth: 420)
+                    Button("BACK TO HOME") { model.openDashboard() }
+                        .buttonStyle(HeroButtonStyle(kind: .outlined))
+                        .frame(maxWidth: 360)
                 }
             }
-            .padding(6)
+            .padding(.vertical, 6)
         }
     }
 }
@@ -392,52 +470,65 @@ struct ReviewView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Needs Review")
-                            .font(.system(size: 34, weight: .bold, design: .rounded))
-                        Text("These words will keep resurfacing until you rebuild their 3-correct streak.")
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Back") { model.openDashboard() }
-                }
+            VStack(alignment: .leading, spacing: 24) {
+                SectionHero(
+                    eyebrow: "REVIEW QUEUE",
+                    title: "Failed Words",
+                    subtitle: "These words will keep returning until you rebuild their 3-correct streak.",
+                    trailingText: "\(model.reviewWords.count)"
+                )
 
                 if model.reviewWords.isEmpty {
-                    GlassCard {
-                        ContentUnavailableView("No review words right now", systemImage: "checkmark.circle", description: Text("You cleared the current queue."))
+                    SurfaceCard {
+                        ContentUnavailableView(
+                            "No review words right now",
+                            systemImage: "checkmark.circle",
+                            description: Text("You cleared the current queue.")
+                        )
                     }
                 } else {
-                    Button("Start review rescue") { model.startFailedReview() }
-                        .buttonStyle(.borderedProminent)
+                    HStack(spacing: 12) {
+                        Button("START REVIEW RESCUE") { model.startFailedReview() }
+                            .buttonStyle(HeroButtonStyle(kind: .filled))
+                            .frame(maxWidth: 380)
+                        Button("BACK TO HOME") { model.openDashboard() }
+                            .buttonStyle(HeroButtonStyle(kind: .outlined))
+                            .frame(maxWidth: 280)
+                    }
 
                     VStack(spacing: 12) {
                         ForEach(model.reviewWords, id: \.word.id) { item in
-                            GlassCard {
-                                HStack {
+                            SurfaceCard {
+                                HStack(spacing: 18) {
                                     VStack(alignment: .leading, spacing: 8) {
                                         Text(item.word.english)
-                                            .font(.title3.bold())
+                                            .font(.system(size: 30, weight: .bold, design: .serif))
+                                            .foregroundStyle(AppPalette.ink)
                                         Text(item.word.primaryChinese)
-                                            .foregroundStyle(.secondary)
+                                            .font(.system(size: 20, weight: .medium, design: .default))
+                                            .foregroundStyle(AppPalette.muted)
                                         HStack(spacing: 10) {
                                             TopicChip(topic: item.word.topic)
-                                            Text("Streak \(item.progress.currentCorrectStreak)/3")
-                                                .font(.footnote)
-                                                .foregroundStyle(.secondary)
+                                            PillLabel(text: "Streak \(item.progress.currentCorrectStreak)/3", tint: AppPalette.olive, fill: AppPalette.oliveSoft)
                                         }
                                     }
+
                                     Spacer()
-                                    MetricTile(title: "Priority", value: "\(item.progress.reviewPriority)", caption: "How soon it returns", tint: Color(red: 0.82, green: 0.42, blue: 0.15))
-                                        .frame(width: 170)
+
+                                    MetricTile(
+                                        title: "Priority",
+                                        value: "\(item.progress.reviewPriority)",
+                                        caption: "Higher means it returns sooner",
+                                        tint: AppPalette.terracotta
+                                    )
+                                    .frame(width: 230)
                                 }
                             }
                         }
                     }
                 }
             }
-            .padding(6)
+            .padding(.vertical, 6)
         }
     }
 }
@@ -447,57 +538,99 @@ struct HistoryView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("History")
-                            .font(.system(size: 34, weight: .bold, design: .rounded))
-                        Text("Track how your placement, missions, and review rescues are adding up over time.")
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Back") { model.openDashboard() }
+            VStack(alignment: .leading, spacing: 24) {
+                SectionHero(
+                    eyebrow: "SESSION HISTORY",
+                    title: "Progress Trail",
+                    subtitle: "Track how your placement tests, missions, and review rescues are adding up over time.",
+                    trailingText: "\(model.sessionHistory.count)"
+                )
+
+                HStack(spacing: 12) {
+                    Button("BACK TO HOME") { model.openDashboard() }
+                        .buttonStyle(HeroButtonStyle(kind: .outlined))
+                        .frame(maxWidth: 280)
                 }
 
                 if model.sessionHistory.isEmpty {
-                    GlassCard {
-                        ContentUnavailableView("No sessions yet", systemImage: "clock", description: Text("Complete a placement test or mission to start building history."))
+                    SurfaceCard {
+                        ContentUnavailableView(
+                            "No sessions yet",
+                            systemImage: "clock",
+                            description: Text("Complete a placement test or mission to start building history.")
+                        )
                     }
                 } else {
                     VStack(spacing: 12) {
                         ForEach(model.sessionHistory, id: \.id) { summary in
-                            GlassCard {
+                            SurfaceCard {
                                 VStack(alignment: .leading, spacing: 10) {
                                     HStack {
-                                        PillLabel(text: summary.mode.title, tint: Color(red: 0.24, green: 0.44, blue: 0.82))
+                                        PillLabel(text: summary.mode.title.uppercased(), tint: AppPalette.blue, fill: AppPalette.blueSoft)
                                         Spacer()
                                         Text(summary.completedAt.formatted(date: .abbreviated, time: .shortened))
-                                            .font(.footnote)
-                                            .foregroundStyle(.secondary)
+                                            .font(.system(size: 16, weight: .medium, design: .default))
+                                            .foregroundStyle(AppPalette.muted)
                                     }
+
                                     Text(summary.headline)
-                                        .font(.title3.bold())
+                                        .font(.system(size: 32, weight: .bold, design: .serif))
+                                        .foregroundStyle(AppPalette.ink)
+
                                     Text(summary.body)
-                                        .foregroundStyle(.secondary)
-                                    HStack(spacing: 18) {
-                                        Text("Score: \(summary.correctAnswers) / \(summary.totalQuestions)")
-                                        Text("Accuracy: \(summary.accuracyPercent)%")
-                                        Text("+\(summary.pointsEarned) points")
-                                            .foregroundStyle(Color(red: 0.82, green: 0.42, blue: 0.15))
+                                        .font(.system(size: 20, weight: .medium, design: .default))
+                                        .foregroundStyle(AppPalette.muted)
+
+                                    HStack(spacing: 14) {
+                                        PillLabel(text: "Score \(summary.correctAnswers) / \(summary.totalQuestions)", tint: AppPalette.olive, fill: AppPalette.oliveSoft)
+                                        PillLabel(text: "Accuracy \(summary.accuracyPercent)%", tint: AppPalette.blue, fill: AppPalette.blueSoft)
+                                        PillLabel(text: "+\(summary.pointsEarned) points", tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
                                     }
-                                    .font(.headline)
                                 }
                             }
                         }
                     }
                 }
             }
-            .padding(6)
+            .padding(.vertical, 6)
         }
     }
 }
 
-struct GlassCard<Content: View>: View {
+struct SectionHero: View {
+    let eyebrow: String
+    let title: String
+    let subtitle: String
+    let trailingText: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 24) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(eyebrow)
+                    .font(.system(size: 22, weight: .bold, design: .default))
+                    .tracking(2)
+                    .foregroundStyle(AppPalette.terracotta)
+
+                Text(title)
+                    .font(.system(size: 58, weight: .regular, design: .serif))
+                    .foregroundStyle(AppPalette.ink)
+
+                Text(subtitle)
+                    .font(.system(size: 24, weight: .medium, design: .serif))
+                    .italic()
+                    .foregroundStyle(AppPalette.muted)
+            }
+
+            Spacer()
+
+            Text(trailingText)
+                .font(.system(size: 120, weight: .regular, design: .serif))
+                .foregroundStyle(AppPalette.ghost)
+        }
+    }
+}
+
+struct SurfaceCard<Content: View>: View {
     var title: String?
     @ViewBuilder var content: Content
 
@@ -507,22 +640,27 @@ struct GlassCard<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             if let title {
                 Text(title)
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 18, weight: .bold, design: .default))
+                    .tracking(1)
+                    .foregroundStyle(AppPalette.muted)
             }
+
             content
         }
-        .padding(24)
+        .padding(28)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.white.opacity(0.76))
-        .clipShape(RoundedRectangle(cornerRadius: 28))
-        .overlay(
-            RoundedRectangle(cornerRadius: 28)
-                .stroke(.white.opacity(0.55), lineWidth: 1)
+        .background(
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .fill(AppPalette.panel)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .stroke(AppPalette.border, lineWidth: 1.2)
+        )
+        .shadow(color: Color.black.opacity(0.05), radius: 18, x: 0, y: 8)
     }
 }
 
@@ -535,33 +673,44 @@ struct MetricTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.headline)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 16, weight: .bold, design: .default))
+                .tracking(0.8)
+                .foregroundStyle(AppPalette.muted)
+
             Text(value)
-                .font(.system(size: 28, weight: .bold, design: .rounded))
+                .font(.system(size: 34, weight: .bold, design: .default))
                 .foregroundStyle(tint)
+                .minimumScaleFactor(0.75)
+
             Text(caption)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 15, weight: .medium, design: .default))
+                .foregroundStyle(AppPalette.muted)
         }
-        .padding(18)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.white.opacity(0.78))
-        .clipShape(RoundedRectangle(cornerRadius: 22))
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(AppPalette.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(AppPalette.border, lineWidth: 1.2)
+        )
     }
 }
 
 struct PillLabel: View {
     let text: String
     let tint: Color
+    let fill: Color
 
     var body: some View {
         Text(text)
-            .font(.footnote.bold())
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(tint.opacity(0.16))
+            .font(.system(size: 15, weight: .bold, design: .default))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
             .foregroundStyle(tint)
+            .background(fill)
             .clipShape(Capsule())
     }
 }
@@ -570,66 +719,110 @@ struct TopicChip: View {
     let topic: WordTopic
 
     var body: some View {
-        Text(topic.displayName)
-            .font(.footnote.bold())
-            .padding(.horizontal, 12)
+        Text(topic.displayName.uppercased())
+            .font(.system(size: 14, weight: .bold, design: .default))
+            .tracking(1)
+            .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(Color(red: 0.24, green: 0.44, blue: 0.82).opacity(0.12))
-            .foregroundStyle(Color(red: 0.24, green: 0.44, blue: 0.82))
+            .foregroundStyle(AppPalette.blue)
+            .background(AppPalette.blueSoft)
             .clipShape(Capsule())
     }
 }
 
-struct ProgressRing: View {
-    let value: Double
-    let title: String
-    let valueText: String
-    let tint: Color
+struct ChoiceButton: View {
+    let letter: String
+    let text: String
+    let accent: Color
+    let action: () -> Void
 
     var body: some View {
-        VStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .stroke(tint.opacity(0.16), lineWidth: 14)
-                Circle()
-                    .trim(from: 0, to: max(0.04, min(value, 1.0)))
-                    .stroke(tint, style: StrokeStyle(lineWidth: 14, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                VStack(spacing: 4) {
-                    Text(valueText)
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                    Text(title)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+        Button(action: action) {
+            HStack(spacing: 18) {
+                ZStack {
+                    Circle()
+                        .fill(accent.opacity(0.14))
+                        .frame(width: 50, height: 50)
+
+                    Text(letter)
+                        .font(.system(size: 22, weight: .bold, design: .default))
+                        .foregroundStyle(accent)
                 }
+
+                Text(text)
+                    .font(.system(size: 28, weight: .semibold, design: .default))
+                    .foregroundStyle(AppPalette.ink)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Spacer(minLength: 0)
             }
-            .frame(width: 150, height: 150)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 22)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(Color.white)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .stroke(AppPalette.border, lineWidth: 1.2)
+            )
         }
-        .frame(maxWidth: .infinity)
+        .buttonStyle(.plain)
+        .shadow(color: Color.black.opacity(0.03), radius: 12, x: 0, y: 6)
     }
 }
 
-struct MissionActionCard: View {
-    let title: String
-    let subtitle: String
-    let detail: String
-    let accent: Color
-    let buttonTitle: String
-    let action: () -> Void
-    var disabled: Bool = false
+struct HeroButtonStyle: ButtonStyle {
+    enum Kind {
+        case filled
+        case outlined
+    }
 
-    var body: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 12) {
-                PillLabel(text: title, tint: accent)
-                Text(subtitle)
-                    .font(.title3.bold())
-                Text(detail)
-                    .foregroundStyle(.secondary)
-                Button(buttonTitle, action: action)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(disabled)
-            }
+    let kind: Kind
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 32, weight: .bold, design: .default))
+            .tracking(1)
+            .foregroundStyle(kind == .filled ? Color.white : AppPalette.olive)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 26)
+            .padding(.vertical, 28)
+            .background(background(isPressed: configuration.isPressed))
+            .overlay(
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .stroke(kind == .filled ? AppPalette.olive : AppPalette.olive, lineWidth: kind == .filled ? 0 : 2)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .shadow(color: Color.black.opacity(configuration.isPressed ? 0.02 : 0.08), radius: configuration.isPressed ? 6 : 14, x: 0, y: configuration.isPressed ? 2 : 8)
+            .scaleEffect(configuration.isPressed ? 0.99 : 1.0)
+    }
+
+    @ViewBuilder
+    private func background(isPressed: Bool) -> some View {
+        switch kind {
+        case .filled:
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(AppPalette.olive.opacity(isPressed ? 0.92 : 1.0))
+        case .outlined:
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(Color.white.opacity(isPressed ? 0.92 : 1.0))
         }
+    }
+}
+
+struct SecondaryNavButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 18, weight: .bold, design: .default))
+            .tracking(1)
+            .foregroundStyle(AppPalette.olive)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(AppPalette.oliveSoft)
+            .clipShape(Capsule())
+            .opacity(configuration.isPressed ? 0.85 : 1.0)
     }
 }

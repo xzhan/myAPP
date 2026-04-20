@@ -149,7 +149,7 @@ final class AppModel {
     }
 
     func startPlacement() {
-        let questions = SessionPlanner.placementQuestions(words: words, data: data, count: min(20, max(10, words.count)))
+        let questions = SessionPlanner.placementQuestions(words: words, data: data, count: min(100, words.count))
         startSession(mode: .placement, questions: questions)
     }
 
