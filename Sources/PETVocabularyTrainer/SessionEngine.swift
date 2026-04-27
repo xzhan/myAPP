@@ -7,6 +7,82 @@ extension Array where Element: Hashable {
     }
 }
 
+enum ReviewScheduler {
+    static let dailyTargetWordCount = 45
+    static let spacedIntervals: [TimeInterval] = [
+        10 * 60,
+        24 * 60 * 60,
+        2 * 24 * 60 * 60,
+        4 * 24 * 60 * 60,
+        7 * 24 * 60 * 60
+    ]
+    static let spacedIntervalLabels = [
+        "10 minutes",
+        "1 day",
+        "2 days",
+        "4 days",
+        "7 days"
+    ]
+
+    static func isScheduled(_ progress: WordProgress) -> Bool {
+        progress.nextReviewAt != nil || progress.reviewPriority > 0
+    }
+
+    static func isDue(_ progress: WordProgress, now: Date = .now) -> Bool {
+        if let nextReviewAt = progress.nextReviewAt {
+            return nextReviewAt <= now
+        }
+        return progress.reviewPriority > 0
+    }
+
+    static func registerFailure(to progress: inout WordProgress, answeredAt: Date) {
+        progress.reviewStep = 0
+        progress.nextReviewAt = answeredAt.addingTimeInterval(spacedIntervals[0])
+    }
+
+    static func recordRetrySignal(to progress: inout WordProgress, answeredAt: Date) {
+        progress.retryMissCount += 1
+        progress.lastRetryMissAt = answeredAt
+        progress.reviewStep = 0
+        let retryReminderAt = answeredAt.addingTimeInterval(spacedIntervals[0])
+        if let nextReviewAt = progress.nextReviewAt {
+            progress.nextReviewAt = min(nextReviewAt, retryReminderAt)
+        } else {
+            progress.nextReviewAt = retryReminderAt
+        }
+        progress.reviewPriority = max(progress.reviewPriority, 2)
+    }
+
+    static func registerSuccess(to progress: inout WordProgress, answeredAt: Date) {
+        guard progress.nextReviewAt != nil || progress.totalIncorrect > 0 else { return }
+
+        let nextStep = min(progress.reviewStep + 1, spacedIntervals.count - 1)
+        progress.reviewStep = nextStep
+        progress.nextReviewAt = answeredAt.addingTimeInterval(spacedIntervals[nextStep])
+    }
+
+    static var strategyDescription: String {
+        "Missed words return in 10 minutes, 1 day, 2 days, 4 days, then 7 days."
+    }
+
+    static func stageLabel(forStep step: Int) -> String {
+        let clampedStep = min(max(step, 0), spacedIntervalLabels.count - 1)
+        return "Step \(clampedStep + 1) · \(spacedIntervalLabels[clampedStep])"
+    }
+
+    static func reminderCaption(for progress: WordProgress, now: Date = .now) -> String {
+        guard let nextReviewAt = progress.nextReviewAt else {
+            return isDue(progress, now: now) ? "Due now" : "Scheduled"
+        }
+
+        if nextReviewAt <= now {
+            return "Due now"
+        }
+
+        return "Due \(nextReviewAt.formatted(date: .abbreviated, time: .shortened))"
+    }
+}
+
 enum MasteryEngine {
     @discardableResult
     static func applyAttempt(to progress: inout WordProgress, isCorrect: Bool, answeredAt: Date) -> Bool {
@@ -17,14 +93,20 @@ enum MasteryEngine {
             progress.currentCorrectStreak += 1
             progress.totalCorrect += 1
             progress.reviewPriority = max(0, progress.reviewPriority - 1)
+            ReviewScheduler.registerSuccess(to: &progress, answeredAt: answeredAt)
         } else {
             progress.currentCorrectStreak = 0
             progress.totalIncorrect += 1
             progress.lastIncorrectAt = answeredAt
             progress.reviewPriority += 2
+            ReviewScheduler.registerFailure(to: &progress, answeredAt: answeredAt)
         }
 
         progress.isMastered = progress.currentCorrectStreak >= 3
+        if progress.isMastered {
+            progress.reviewPriority = 0
+            progress.nextReviewAt = nil
+        }
         return !wasMastered && progress.isMastered
     }
 }
@@ -34,16 +116,23 @@ enum SessionPlanner {
         let ordered = words
             .filter { !progress(for: $0.id, in: data).isMastered }
             .sorted { $0.english.localizedCaseInsensitiveCompare($1.english) == .orderedAscending }
-        return buildQuestions(from: Array(ordered.prefix(count)), allWords: words)
+        return buildQuestions(from: Array(ordered.prefix(count)), allWords: words, style: .meaningChoice)
     }
 
     static func missionQuestions(words: [VocabularyWord], data: AppStoreData, count: Int = 15, preferredTopics: [WordTopic] = []) -> [PersistedQuestion] {
+        let now = Date()
+
         let failed = wordsMatching(words: words, data: data) { progress in
-            progress.reviewPriority > 0
+            ReviewScheduler.isDue(progress, now: now)
         }
         .sorted { lhs, rhs in
             let leftProgress = progress(for: lhs.id, in: data)
             let rightProgress = progress(for: rhs.id, in: data)
+            let leftDate = leftProgress.nextReviewAt ?? leftProgress.lastIncorrectAt ?? .distantPast
+            let rightDate = rightProgress.nextReviewAt ?? rightProgress.lastIncorrectAt ?? .distantPast
+            if leftDate != rightDate {
+                return leftDate < rightDate
+            }
             if leftProgress.reviewPriority != rightProgress.reviewPriority {
                 return leftProgress.reviewPriority > rightProgress.reviewPriority
             }
@@ -51,9 +140,16 @@ enum SessionPlanner {
         }
 
         let reviewing = wordsMatching(words: words, data: data) { progress in
-            !progress.isMastered && progress.reviewPriority == 0 && progress.totalAttempts > 0
+            !progress.isMastered && progress.totalAttempts > 0 && !ReviewScheduler.isDue(progress, now: now)
         }
         .sorted { lhs, rhs in
+            let leftProgress = progress(for: lhs.id, in: data)
+            let rightProgress = progress(for: rhs.id, in: data)
+            let leftScheduled = ReviewScheduler.isScheduled(leftProgress)
+            let rightScheduled = ReviewScheduler.isScheduled(rightProgress)
+            if leftScheduled != rightScheduled {
+                return leftScheduled && !rightScheduled
+            }
             let leftScore = topicPriority(for: lhs.topic, preferredTopics: preferredTopics)
             let rightScore = topicPriority(for: rhs.topic, preferredTopics: preferredTopics)
             if leftScore != rightScore {
@@ -76,16 +172,28 @@ enum SessionPlanner {
 
         let ordered = (failed + reviewing + newWords).uniqued()
         let chosen = Array(ordered.prefix(max(1, count)))
-        return buildQuestions(from: chosen, allWords: words)
+        return buildQuestions(from: chosen, allWords: words, style: .wordExercise)
     }
 
     static func failedReviewQuestions(words: [VocabularyWord], data: AppStoreData, count: Int = 10) -> [PersistedQuestion] {
+        let now = Date()
+
         let failed = wordsMatching(words: words, data: data) { progress in
-            progress.reviewPriority > 0
+            ReviewScheduler.isScheduled(progress)
         }
         .sorted { lhs, rhs in
             let leftProgress = progress(for: lhs.id, in: data)
             let rightProgress = progress(for: rhs.id, in: data)
+            let leftDue = ReviewScheduler.isDue(leftProgress, now: now)
+            let rightDue = ReviewScheduler.isDue(rightProgress, now: now)
+            if leftDue != rightDue {
+                return leftDue && !rightDue
+            }
+            let leftDate = leftProgress.nextReviewAt ?? leftProgress.lastIncorrectAt ?? .distantPast
+            let rightDate = rightProgress.nextReviewAt ?? rightProgress.lastIncorrectAt ?? .distantPast
+            if leftDate != rightDate {
+                return leftDate < rightDate
+            }
             if leftProgress.reviewPriority != rightProgress.reviewPriority {
                 return leftProgress.reviewPriority > rightProgress.reviewPriority
             }
@@ -93,7 +201,26 @@ enum SessionPlanner {
         }
 
         let chosen = Array(failed.prefix(max(1, count)))
-        return chosen.isEmpty ? missionQuestions(words: words, data: data, count: count) : buildQuestions(from: chosen, allWords: words)
+        return chosen.isEmpty
+            ? missionQuestions(words: words, data: data, count: count)
+            : buildQuestions(from: chosen, allWords: words, style: .wordExercise)
+    }
+
+    static func pageQuestions(
+        words: [VocabularyWord],
+        wordIDs: [String],
+        pageNumber: Int,
+        pageTitle: String
+    ) -> [PersistedQuestion] {
+        let wordsByID = Dictionary(uniqueKeysWithValues: words.map { ($0.id, $0) })
+        let selectedWords = wordIDs.compactMap { wordsByID[$0] }
+        return buildQuestions(
+            from: selectedWords,
+            allWords: words,
+            style: .wordExercise,
+            sourcePageNumber: pageNumber,
+            sourcePageTitle: pageTitle
+        )
     }
 
     private static func wordsMatching(words: [VocabularyWord], data: AppStoreData, predicate: (WordProgress) -> Bool) -> [VocabularyWord] {
@@ -108,10 +235,23 @@ enum SessionPlanner {
         preferredTopics.firstIndex(of: topic) ?? Int.max
     }
 
-    private static func buildQuestions(from selected: [VocabularyWord], allWords: [VocabularyWord]) -> [PersistedQuestion] {
+    private static func buildQuestions(
+        from selected: [VocabularyWord],
+        allWords: [VocabularyWord],
+        style: QuestionPresentationStyle,
+        sourcePageNumber: Int? = nil,
+        sourcePageTitle: String? = nil
+    ) -> [PersistedQuestion] {
         selected.map { word in
             let choices = buildChoices(for: word, allWords: allWords)
-            return PersistedQuestion(wordID: word.id, choices: choices)
+            return PersistedQuestion(
+                wordID: word.id,
+                choices: choices,
+                style: style,
+                exampleSentence: style == .wordExercise ? ExampleSentenceGenerator.sentence(for: word) : nil,
+                sourcePageNumber: sourcePageNumber,
+                sourcePageTitle: sourcePageTitle
+            )
         }
     }
 
@@ -132,6 +272,80 @@ enum SessionPlanner {
         }
 
         return cleanedChoices.shuffled()
+    }
+}
+
+enum ExampleSentenceGenerator {
+    static func sentence(for word: VocabularyWord) -> String {
+        let english = word.english.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if looksLikeProperNoun(english) {
+            return "They read a short article about \(english) in class today."
+        }
+
+        if looksLikeAdverb(english) {
+            return "She answered \(english) during the speaking task."
+        }
+
+        if looksLikeAdjective(english) {
+            return "After the discussion, everyone felt \(english) about the result."
+        }
+
+        if word.topic == .actions || looksLikeVerb(english) {
+            return "Please \(english) the answer before the lesson ends."
+        }
+
+        switch word.topic {
+        case .school:
+            return "The teacher wrote \(english) on the board for today's review."
+        case .travel:
+            return "The travel guide mentioned \(english) on the first page."
+        case .home:
+            return "At home, they kept \(english) near the window."
+        case .food:
+            return "For lunch, she ordered \(english) with a warm drink."
+        case .health:
+            return "The doctor mentioned \(english) during the check-up."
+        case .shopping:
+            return "She bought \(english) at the market on Saturday."
+        case .transport:
+            return "They missed the \(english) and waited for the next one."
+        case .work:
+            return "At work, the manager asked for the \(english) before noon."
+        case .people:
+            return "Everyone said the \(english) was friendly and easy to talk to."
+        case .feelings:
+            return "He tried to hide the feeling of \(english) after the news."
+        case .places:
+            return "They were excited to visit \(english) during the school exchange."
+        case .actions:
+            return "Please \(english) the answer before the lesson ends."
+        case .time:
+            return "They planned to meet in the \(english) after class."
+        case .communication:
+            return "In the dialogue, she sent a short \(english) before dinner."
+        }
+    }
+
+    private static func looksLikeProperNoun(_ english: String) -> Bool {
+        guard let firstCharacter = english.first else { return false }
+        return firstCharacter.isUppercase
+    }
+
+    private static func looksLikeAdverb(_ english: String) -> Bool {
+        english.lowercased().hasSuffix("ly")
+    }
+
+    private static func looksLikeAdjective(_ english: String) -> Bool {
+        let lowercased = english.lowercased()
+        let suffixes = ["ous", "ful", "able", "ible", "ive", "al", "ic", "ish", "less"]
+        return suffixes.contains { lowercased.hasSuffix($0) }
+    }
+
+    private static func looksLikeVerb(_ english: String) -> Bool {
+        let lowercased = english.lowercased()
+        let verbHints = ["ate", "fy", "ise", "ize", "ing", "ed", "en"]
+        return verbHints.contains { lowercased.hasSuffix($0) }
     }
 }
 
@@ -321,22 +535,25 @@ enum MissionPersonalizer {
             topicLabel = focusTopics.prefix(2).map(\.displayName).joined(separator: " + ")
         }
 
-        let questionCount = min(max(studyPlan.estimate.dailyGoalWords, 10), 20)
+        let questionCount = ReviewScheduler.dailyTargetWordCount
         let subtitle: String
         if reviewCount > 0 {
-            subtitle = "Blend failed words with \(topicLabel.lowercased()) review so your weak areas improve faster."
+            subtitle = "Your 45-word plan starts with \(reviewCount) review words due now, then fills the rest with \(topicLabel.lowercased()) meaning, sentence, and spelling reinforcement."
         } else if dailyStreak > 1 {
-            subtitle = "Keep your streak alive with a focused \(topicLabel.lowercased()) mission tuned from your placement test."
+            subtitle = "Keep your streak alive with a full 45-word \(topicLabel.lowercased()) study block tuned for meaning, sentence context, and spelling."
         } else {
-            subtitle = "Start a focused \(topicLabel.lowercased()) mission based on your 100-word placement result."
+            subtitle = "Start a 45-word \(topicLabel.lowercased()) study block with meaning choice, sentence clues, and spelling checks."
         }
+        let freshWordCount = max(0, questionCount - min(reviewCount, questionCount))
 
         return PersonalizedMissionPlan(
-            title: "\(topicLabel) mission",
+            title: "\(topicLabel) 45-word plan",
             subtitle: subtitle,
             recommendedQuestionCount: questionCount,
+            dueReviewCount: reviewCount,
+            freshWordCount: freshWordCount,
             focusTopics: focusTopics,
-            rewardText: "Finish \(questionCount) questions to chip away at the \(studyPlan.estimate.remainingToBenchmark)-word gap."
+            rewardText: "Finish all \(questionCount) words today to balance due review with fresh progress toward the \(studyPlan.estimate.remainingToBenchmark)-word gap."
         )
     }
 }
@@ -348,7 +565,7 @@ enum ProgressAnalytics {
 
     static func masteryPercent(masteredCount: Int, totalWordCount: Int) -> Int {
         guard totalWordCount > 0 else { return 0 }
-        return Int((Double(masteredCount) / Double(totalWordCount)) * 100.0)
+        return Int((Double(masteredCount) / Double(totalWordCount) * 100.0).rounded())
     }
 
     static func rankTitle(forMasteryPercent masteryPercent: Int) -> String {
@@ -364,8 +581,13 @@ enum ProgressAnalytics {
     static func focusTopics(words: [VocabularyWord], data: AppStoreData, limit: Int = 3) -> [WordTopic] {
         let wordsByID = Dictionary(uniqueKeysWithValues: words.map { ($0.id, $0) })
         let queueTopics = data.progressByWordID.values
-            .filter { $0.reviewPriority > 0 }
+            .filter { ReviewScheduler.isScheduled($0) }
             .sorted { lhs, rhs in
+                let leftDate = lhs.nextReviewAt ?? lhs.lastIncorrectAt ?? .distantPast
+                let rightDate = rhs.nextReviewAt ?? rhs.lastIncorrectAt ?? .distantPast
+                if leftDate != rightDate {
+                    return leftDate < rightDate
+                }
                 if lhs.reviewPriority != rhs.reviewPriority {
                     return lhs.reviewPriority > rhs.reviewPriority
                 }
@@ -383,12 +605,12 @@ enum ProgressAnalytics {
         }
         if reviewCount > 0 {
             let focusText = focusTopics.first?.displayName.lowercased() ?? "your weak topics"
-            return "Priority mission: rescue review words and tighten up \(focusText)."
+            return "Today's 45-word plan starts with \(reviewCount) review words due now and tightens up \(focusText) through meaning, sentence, and spelling practice."
         }
         if dailyStreak > 1 {
-            return "Keep your \(dailyStreak)-day streak alive with a fresh 15-word sprint."
+            return "Keep your \(dailyStreak)-day streak alive with today's 45-word meaning and spelling plan."
         }
-        return "Build momentum with a fresh mixed mission and start stacking points."
+        return "Build momentum with a 45-word mixed plan and start stacking points."
     }
 }
 
