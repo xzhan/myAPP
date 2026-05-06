@@ -35,6 +35,9 @@ struct PETVocabularyTrainerApp: App {
                 .task {
                     activateApplicationWindow()
                     model.bootstrap()
+                    ReviewNotificationRouter.shared.install {
+                        model.openReview()
+                    }
                 }
         }
         .defaultSize(width: 1280, height: 860)
@@ -760,12 +763,8 @@ struct HomeMissionStepCard: View {
             }
         case .quest:
             if let actionTitle = step.actionTitle {
-                Button(model.currentSession?.mode != nil && model.currentSession?.mode != .placement ? model.resumeSessionTitle : actionTitle) {
-                    if model.currentSession?.mode != nil && model.currentSession?.mode != .placement {
-                        model.resumeCurrentSession()
-                    } else {
-                        model.performCurrentUnitPrimaryAction()
-                    }
+                Button(model.homeQuestActionTitle.isEmpty ? actionTitle : model.homeQuestActionTitle) {
+                    model.performHomeQuestAction()
                 }
                 .buttonStyle(HorizontalMainlineActionButtonStyle(tint: tint))
             }
@@ -3056,18 +3055,52 @@ struct PronunciationSelfCheckCard: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
+                    HStack(spacing: 12) {
+                        Text("Target word")
+                            .font(.system(size: 15, weight: .black, design: .default))
+                            .tracking(1.2)
+                            .foregroundStyle(AppPalette.muted)
+                        Text(targetWord)
+                            .font(.system(size: 30, weight: .bold, design: .serif))
+                            .foregroundStyle(AppPalette.ink)
+                        if let rating = coach.rating {
+                            Text(rating.heartMeter)
+                                .font(.system(size: 28, weight: .bold, design: .default))
+                                .accessibilityLabel(rating.feedbackLabel)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .fill(AppPalette.oliveSoft.opacity(0.65))
+                    )
+
                     FlowLayout(spacing: 10) {
                         PronunciationButton(title: "Play word", tint: AppPalette.blue, action: onPlayWord)
 
-                        Button(primarySpeechButtonTitle) {
-                            if coach.state == .listening {
-                                coach.finish(targetWord: targetWord)
-                            } else {
+                        if coach.state == .unavailable, let recovery = coach.permissionRecovery {
+                            Button(recovery.title.uppercased()) {
+                                coach.openPermissionSettings()
+                            }
+                            .buttonStyle(CompactFilledButtonStyle(tint: AppPalette.terracotta))
+
+                            Button("CHECK AGAIN") {
                                 coach.start(targetWord: targetWord)
                             }
+                            .buttonStyle(CompactOutlineButtonStyle(tint: AppPalette.olive))
+                        } else {
+                            Button(primarySpeechButtonTitle) {
+                                if coach.state == .listening {
+                                    coach.finish(targetWord: targetWord)
+                                } else {
+                                    coach.start(targetWord: targetWord)
+                                }
+                            }
+                            .buttonStyle(CompactFilledButtonStyle(tint: coach.state == .listening ? AppPalette.terracotta : AppPalette.olive))
+                            .disabled(coach.state == .requestingPermission || coach.state == .checking)
                         }
-                        .buttonStyle(CompactFilledButtonStyle(tint: coach.state == .listening ? AppPalette.terracotta : AppPalette.olive))
-                        .disabled(coach.state == .requestingPermission || coach.state == .checking)
                     }
 
                     if !coach.transcript.isEmpty {
@@ -3076,14 +3109,14 @@ struct PronunciationSelfCheckCard: View {
 
                     if coach.state == .result, let rating = coach.rating {
                         HStack(spacing: 12) {
-                            if rating != .clear {
+                            if rating == .needsPractice {
                                 Button("TRY SPEAKING AGAIN") {
                                     coach.start(targetWord: targetWord)
                                 }
                                 .buttonStyle(CompactOutlineButtonStyle(tint: AppPalette.terracotta))
                             }
 
-                            Button(rating == .clear ? "CONTINUE TO SPELLING" : "CONTINUE WITH REMINDER") {
+                            Button(rating.countsAsStrong ? "CONTINUE TO SPELLING" : "CONTINUE WITH REMINDER") {
                                 onRate(rating)
                             }
                             .buttonStyle(CompactFilledButtonStyle(tint: rating.countsAsStrong ? AppPalette.olive : AppPalette.terracotta))
@@ -3091,9 +3124,17 @@ struct PronunciationSelfCheckCard: View {
                     }
 
                     if coach.state == .unavailable {
-                        Text("Fallback: choose honestly after saying the word out loud.")
-                            .font(.system(size: 17, weight: .semibold, design: .default))
-                            .foregroundStyle(AppPalette.muted)
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let recovery = coach.permissionRecovery {
+                                Text(recovery.detail)
+                                    .font(.system(size: 17, weight: .semibold, design: .default))
+                                    .foregroundStyle(AppPalette.terracotta)
+                            }
+
+                            Text("Fallback: choose honestly after saying the word out loud.")
+                                .font(.system(size: 17, weight: .semibold, design: .default))
+                                .foregroundStyle(AppPalette.muted)
+                        }
                     }
 
                     DisclosureGroup("Manual self-check") {
@@ -3140,7 +3181,9 @@ struct PronunciationSelfCheckCard: View {
             return "CAT IS CHECKING"
         case .result:
             return "START AGAIN"
-        case .idle, .unavailable:
+        case .unavailable:
+            return "CHECK AGAIN"
+        case .idle:
             return "START SPEAKING"
         }
     }
@@ -3186,7 +3229,7 @@ struct RecognizedSpeechStrip: View {
             Spacer()
             if let rating {
                 PillLabel(
-                    text: rating.feedbackLabel.uppercased(),
+                    text: "\(rating.heartMeter) \(rating.feedbackLabel.uppercased())",
                     tint: rating.countsAsStrong ? AppPalette.success : AppPalette.terracotta,
                     fill: rating.countsAsStrong ? AppPalette.successSoft : AppPalette.errorSoft
                 )
@@ -3521,13 +3564,22 @@ struct SummaryView: View {
 
     var body: some View {
         let summary = model.latestSummary
+        let isRescueSummary = summary?.mode == .failedReview
         let placementPlan = summary?.mode == .placement
             ? summary.map { PlacementPlanner.plan(correctAnswers: $0.correctAnswers, totalQuestions: $0.totalQuestions, weakTopics: $0.weakTopics, topicInsights: $0.placementTopicInsights ?? []) }
             : nil
 
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                CatCelebrationCard()
+                CatCelebrationCard(
+                    title: isRescueSummary ? "Cat rescue sprint cleared" : "Cat cheer unlocked",
+                    message: isRescueSummary
+                        ? "The cat is happier because this sprint stayed small: a few words rescued, no giant backlog wall."
+                        : "A playful cat now celebrates every finished practice session so the ending feels rewarding, not abrupt.",
+                    footnote: isRescueSummary
+                        ? "Choose another 5 only if the learner still has energy."
+                        : "The animation stays local, lightweight, and non-blocking."
+                )
 
                 SurfaceCard {
                     VStack(alignment: .leading, spacing: 12) {
@@ -3648,28 +3700,67 @@ struct SummaryView: View {
                     )
                 }
 
-                HStack(spacing: 14) {
-                    Button(model.hasQuestPages
-                                ? model.currentUnitSnapshot.primaryActionTitle
-                                : (summary?.mode == .placement ? "START TODAY'S 45-WORD PLAN" : "RETRY FAILED WORDS")) {
-                        if model.hasQuestPages {
-                            model.performCurrentUnitPrimaryAction()
-                        } else if summary?.mode == .placement {
-                            model.startMission()
-                        } else {
-                            model.startFailedReview()
+                if isRescueSummary {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack(spacing: 14) {
+                            Button(model.reviewWords.isEmpty ? "RESCUE CLEAR" : "CONTINUE ANOTHER 5") {
+                                model.startFailedReview()
+                            }
+                            .buttonStyle(HeroButtonStyle(kind: .filled))
+                            .frame(maxWidth: 420)
+                            .disabled(model.reviewWords.isEmpty)
+
+                            Button("START TODAY'S QUEST") {
+                                if model.hasQuestPages {
+                                    model.performCurrentUnitPrimaryAction()
+                                } else {
+                                    model.startMission()
+                                }
+                            }
+                            .buttonStyle(HeroButtonStyle(kind: .outlined))
+                            .frame(maxWidth: 420)
+                        }
+
+                        Text(model.reviewWords.isEmpty
+                             ? "No rescue words are waiting. Move into today's quest with a clean warm-up."
+                             : "\(model.reviewRescueSnapshot.currentSprintCount) words are ready for the next small sprint; \(model.reviewRescueSnapshot.waitingDueCount) more can wait safely.")
+                            .font(.system(size: 17, weight: .bold, design: .default))
+                            .foregroundStyle(AppPalette.terracotta)
+
+                        HStack(spacing: 14) {
+                            Button("VIEW TROPHIES") { model.openTrophies() }
+                                .buttonStyle(HeroButtonStyle(kind: .outlined))
+                                .frame(maxWidth: 320)
+
+                            Button("BACK TO HOME") { model.openDashboard() }
+                                .buttonStyle(HeroButtonStyle(kind: .outlined))
+                                .frame(maxWidth: 360)
                         }
                     }
-                    .buttonStyle(HeroButtonStyle(kind: .filled))
-                    .frame(maxWidth: 420)
+                } else {
+                    HStack(spacing: 14) {
+                        Button(model.hasQuestPages
+                                    ? model.currentUnitSnapshot.primaryActionTitle
+                                    : (summary?.mode == .placement ? "START TODAY'S 45-WORD PLAN" : "RETRY FAILED WORDS")) {
+                            if model.hasQuestPages {
+                                model.performCurrentUnitPrimaryAction()
+                            } else if summary?.mode == .placement {
+                                model.startMission()
+                            } else {
+                                model.startFailedReview()
+                            }
+                        }
+                        .buttonStyle(HeroButtonStyle(kind: .filled))
+                        .frame(maxWidth: 420)
 
-                    Button("VIEW TROPHIES") { model.openTrophies() }
-                        .buttonStyle(HeroButtonStyle(kind: .outlined))
-                        .frame(maxWidth: 320)
+                        Button("VIEW TROPHIES") { model.openTrophies() }
+                            .buttonStyle(HeroButtonStyle(kind: .outlined))
+                            .frame(maxWidth: 320)
 
-                    Button("BACK TO HOME") { model.openDashboard() }
-                        .buttonStyle(HeroButtonStyle(kind: .outlined))
-                        .frame(maxWidth: 360)
+                        Button("BACK TO HOME") { model.openDashboard() }
+                            .buttonStyle(HeroButtonStyle(kind: .outlined))
+                            .frame(maxWidth: 360)
+                    }
                 }
             }
             .padding(.vertical, 6)
@@ -3682,14 +3773,16 @@ struct ReviewView: View {
 
     var body: some View {
         let reminderSnapshot = model.reviewReminderSnapshot
+        let rescueSnapshot = model.reviewRescueSnapshot
+        let notificationPreferences = model.data.reviewNotificationPreferences
 
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 SectionHero(
                     eyebrow: "REVIEW REMINDERS",
                     title: "Review Rescue",
-                    subtitle: "These words already have reminder times. Clear the due ones first, then the later reminders will spread out again.",
-                    trailingText: "\(model.reviewWords.count)"
+                    subtitle: "A calmer rescue path for words that slipped: due now, coming soon, and later Ebbinghaus steps.",
+                    trailingText: "\(rescueSnapshot.totalCount)"
                 )
 
                 if model.reviewWords.isEmpty {
@@ -3701,16 +3794,20 @@ struct ReviewView: View {
                         )
                     }
                 } else {
-                    ReminderOverviewCard(
+                    ReviewRescueMissionCard(
+                        rescueSnapshot: rescueSnapshot,
                         snapshot: reminderSnapshot,
-                        reviewWords: model.reviewWordSnapshots,
-                        title: "Reminder strategy"
+                        preferences: notificationPreferences,
+                        onStart: model.startFailedReview,
+                        onEnableNotifications: {
+                            Task { await model.enableReviewNotifications() }
+                        },
+                        onDisableNotifications: {
+                            Task { await model.disableReviewNotifications() }
+                        }
                     )
 
                     HStack(spacing: 12) {
-                        Button("START REVIEW RESCUE") { model.startFailedReview() }
-                            .buttonStyle(HeroButtonStyle(kind: .filled))
-                            .frame(maxWidth: 380)
                         Button("TROPHIES") { model.openTrophies() }
                             .buttonStyle(HeroButtonStyle(kind: .outlined))
                             .frame(maxWidth: 280)
@@ -3720,73 +3817,407 @@ struct ReviewView: View {
                     }
 
                     VStack(spacing: 12) {
-                        ForEach(model.reviewWords, id: \.word.id) { item in
-                            SurfaceCard {
-                                VStack(alignment: .leading, spacing: 16) {
-                                    HStack(spacing: 18) {
-                                        VStack(alignment: .leading, spacing: 8) {
-                                            Text(item.word.english)
-                                                .font(.system(size: 30, weight: .bold, design: .serif))
-                                                .foregroundStyle(AppPalette.ink)
-                                            Text(item.word.primaryChinese)
-                                                .font(.system(size: 20, weight: .medium, design: .default))
-                                                .foregroundStyle(AppPalette.muted)
-                                            HStack(spacing: 10) {
-                                                TopicChip(topic: item.word.topic)
-                                                PillLabel(text: "Streak \(item.progress.currentCorrectStreak)/3", tint: AppPalette.olive, fill: AppPalette.oliveSoft)
-                                                PillLabel(
-                                                    text: ReviewScheduler.stageLabel(forStep: item.progress.reviewStep),
-                                                    tint: AppPalette.terracotta,
-                                                    fill: AppPalette.errorSoft
-                                                )
-                                            }
-                                        }
-
-                                        Spacer()
-
-                                        MetricTile(
-                                            title: "Reminder",
-                                            value: "\(item.progress.reviewStep + 1)/\(ReviewScheduler.spacedIntervals.count)",
-                                            caption: reviewCaption(for: item.progress),
-                                            tint: AppPalette.terracotta
-                                        )
-                                        .frame(width: 230)
-                                    }
-
-                                    if let memoryTip = model.memoryTip(forWordID: item.word.id) {
-                                        VStack(alignment: .leading, spacing: 8) {
-                                            Text("Memory Tip")
-                                                .font(.system(size: 15, weight: .bold, design: .default))
-                                                .tracking(0.8)
-                                                .foregroundStyle(AppPalette.muted)
-                                            Text(memoryTip)
-                                                .font(.system(size: 18, weight: .medium, design: .default))
-                                                .foregroundStyle(AppPalette.terracotta)
-                                                .fixedSize(horizontal: false, vertical: true)
-                                        }
-                                        .padding(18)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                                                .fill(Color.white.opacity(0.72))
-                                        )
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                                                .stroke(AppPalette.border, lineWidth: 1.1)
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                        ReviewRescueBucketCard(bucket: rescueSnapshot.dueNow, onStart: model.startFailedReview, onPlayWord: model.speakEnglish)
+                        ReviewRescueBucketCard(bucket: rescueSnapshot.comingSoon, onStart: model.startFailedReview, onPlayWord: model.speakEnglish)
+                        ReviewRescueBucketCard(bucket: rescueSnapshot.backlog, onStart: model.startFailedReview, onPlayWord: model.speakEnglish)
                     }
                 }
             }
             .padding(.vertical, 6)
         }
     }
+}
 
-    private func reviewCaption(for progress: WordProgress) -> String {
-        ReviewScheduler.reminderCaption(for: progress)
+struct ReviewRescueMissionCard: View {
+    let rescueSnapshot: ReviewRescueSnapshot
+    let snapshot: ReviewReminderSnapshot
+    let preferences: ReviewNotificationPreferences
+    let onStart: () -> Void
+    let onEnableNotifications: () -> Void
+    let onDisableNotifications: () -> Void
+
+    var body: some View {
+        SurfaceCard {
+            VStack(alignment: .leading, spacing: 22) {
+                HStack(alignment: .top, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(rescueSnapshot.rescuePackTitle)
+                            .font(.system(size: 34, weight: .bold, design: .serif))
+                            .foregroundStyle(AppPalette.ink)
+                        Text(rescueSnapshot.rescuePackDetail)
+                            .font(.system(size: 20, weight: .medium, design: .default))
+                            .foregroundStyle(AppPalette.muted)
+                    }
+
+                    Spacer()
+
+                    NotificationControlCard(
+                        preferences: preferences,
+                        nextReminderAt: snapshot.nextReminderAt,
+                        onEnable: onEnableNotifications,
+                        onDisable: onDisableNotifications
+                    )
+                    .frame(width: 330)
+                }
+
+                HStack(spacing: 16) {
+                    MetricTile(
+                        title: "Due now",
+                        value: "\(snapshot.dueNowCount)",
+                        caption: rescueSnapshot.currentSprintCount > 0 ? "\(rescueSnapshot.currentSprintCount) in this sprint" : "Clear",
+                        tint: AppPalette.error
+                    )
+                    MetricTile(title: "Coming later", value: "\(snapshot.scheduledLaterCount)", caption: "Still on the curve", tint: AppPalette.blue)
+                    MetricTile(
+                        title: "Safely waiting",
+                        value: "\(rescueSnapshot.waitingDueCount)",
+                        caption: "Not shown all at once",
+                        tint: AppPalette.terracotta
+                    )
+                }
+
+                MemoryCurveStrip()
+
+                Button(rescueSnapshot.primaryActionTitle, action: onStart)
+                    .buttonStyle(HeroButtonStyle(kind: .filled))
+                    .frame(maxWidth: 460)
+            }
+        }
+    }
+}
+
+struct NotificationControlCard: View {
+    let preferences: ReviewNotificationPreferences
+    let nextReminderAt: Date?
+    let onEnable: () -> Void
+    let onDisable: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: preferences.isEnabled ? "bell.badge.fill" : "bell")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(preferences.isEnabled ? AppPalette.success : AppPalette.terracotta)
+                Text(preferences.isEnabled ? "Local Reminder On" : "Local Reminder")
+                    .font(.system(size: 18, weight: .bold, design: .default))
+                    .foregroundStyle(AppPalette.ink)
+            }
+
+            Text(statusText)
+                .font(.system(size: 15, weight: .medium, design: .default))
+                .foregroundStyle(AppPalette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button(preferences.isEnabled ? "TURN OFF" : "REMIND ME") {
+                preferences.isEnabled ? onDisable() : onEnable()
+            }
+            .buttonStyle(SecondaryNavButtonStyle())
+
+            if preferences.permissionDenied {
+                Text("Notifications are blocked in macOS settings.")
+                    .font(.system(size: 13, weight: .bold, design: .default))
+                    .foregroundStyle(AppPalette.error)
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(preferences.isEnabled ? AppPalette.successSoft : AppPalette.oliveSoft)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(preferences.isEnabled ? AppPalette.success.opacity(0.5) : AppPalette.border, lineWidth: 1.2)
+        )
+    }
+
+    private var statusText: String {
+        if preferences.isEnabled {
+            if let nextReminderAt = preferences.lastScheduledAt ?? nextReminderAt {
+                return "Next gentle nudge: \(nextReminderAt.formatted(date: .abbreviated, time: .shortened))."
+            }
+            return "No pending rescue nudge right now."
+        }
+
+        return "Use macOS notifications to bring due words back at the right memory step."
+    }
+}
+
+struct MemoryCurveStrip: View {
+    private let steps = Array(zip(ReviewScheduler.spacedIntervalLabels.indices, ReviewScheduler.spacedIntervalLabels))
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Memory curve")
+                .font(.system(size: 17, weight: .bold, design: .default))
+                .foregroundStyle(AppPalette.muted)
+
+            HStack(spacing: 0) {
+                ForEach(steps, id: \.0) { index, label in
+                    MemoryCurveDot(index: index + 1, label: label)
+                    if index < steps.count - 1 {
+                        Rectangle()
+                            .fill(AppPalette.border)
+                            .frame(height: 2)
+                            .padding(.horizontal, 8)
+                    }
+                }
+            }
+        }
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.72))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(AppPalette.border, lineWidth: 1.1)
+        )
+    }
+}
+
+struct MemoryCurveDot: View {
+    let index: Int
+    let label: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                Circle()
+                    .fill(index == 1 ? AppPalette.terracotta : AppPalette.oliveSoft)
+                    .frame(width: 34, height: 34)
+                Text("\(index)")
+                    .font(.system(size: 15, weight: .bold, design: .default))
+                    .foregroundStyle(index == 1 ? Color.white : AppPalette.olive)
+            }
+            Text(label)
+                .font(.system(size: 13, weight: .bold, design: .default))
+                .foregroundStyle(AppPalette.muted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .frame(minWidth: 96)
+    }
+}
+
+struct ReviewRescueBucketCard: View {
+    let bucket: ReviewRescueBucketSnapshot
+    let onStart: () -> Void
+    let onPlayWord: (String) -> Void
+
+    var body: some View {
+        SurfaceCard {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 10) {
+                            Text(bucket.title)
+                                .font(.system(size: 32, weight: .bold, design: .serif))
+                                .foregroundStyle(AppPalette.ink)
+                            PillLabel(text: "\(bucket.count)", tint: tint, fill: fill)
+                        }
+                        Text(bucket.subtitle)
+                            .font(.system(size: 18, weight: .medium, design: .default))
+                            .foregroundStyle(AppPalette.muted)
+                    }
+
+                    Spacer()
+
+                    if bucket.kind == .dueNow, !bucket.isEmpty {
+                        Button("RESCUE NOW", action: onStart)
+                            .buttonStyle(SecondaryNavButtonStyle())
+                    }
+                }
+
+                if bucket.isEmpty {
+                    Text(emptyText)
+                        .font(.system(size: 18, weight: .medium, design: .default))
+                        .foregroundStyle(AppPalette.muted)
+                        .padding(.vertical, 6)
+                } else {
+                    VStack(spacing: 10) {
+                        ForEach(visibleWords) { word in
+                            ReviewRescueWordCard(word: word) {
+                                onPlayWord(word.english)
+                            }
+                        }
+
+                        if hiddenCount > 0 {
+                            Text(hiddenText)
+                                .font(.system(size: 15, weight: .bold, design: .default))
+                                .foregroundStyle(AppPalette.muted)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var visibleWords: [ReviewRescueWordSnapshot] {
+        switch bucket.kind {
+        case .dueNow:
+            return Array(bucket.words.prefix(ReviewRescuePlanner.rescueSprintSize))
+        case .comingSoon, .backlog:
+            return bucket.isExpanded ? bucket.words : Array(bucket.words.prefix(3))
+        }
+    }
+
+    private var hiddenCount: Int {
+        max(0, bucket.words.count - visibleWords.count)
+    }
+
+    private var hiddenText: String {
+        switch bucket.kind {
+        case .dueNow:
+            return "+\(hiddenCount) more are safely waiting after this sprint"
+        case .comingSoon, .backlog:
+            return "+\(hiddenCount) more words on this path"
+        }
+    }
+
+    private var tint: Color {
+        switch bucket.kind {
+        case .dueNow: return AppPalette.error
+        case .comingSoon: return AppPalette.blue
+        case .backlog: return AppPalette.olive
+        }
+    }
+
+    private var fill: Color {
+        switch bucket.kind {
+        case .dueNow: return AppPalette.errorSoft
+        case .comingSoon: return AppPalette.blueSoft
+        case .backlog: return AppPalette.oliveSoft
+        }
+    }
+
+    private var emptyText: String {
+        switch bucket.kind {
+        case .dueNow: return "No overdue rescue words."
+        case .comingSoon: return "No words are scheduled in the next 24 hours."
+        case .backlog: return "No later memory-curve backlog."
+        }
+    }
+}
+
+struct ReviewRescueWordCard: View {
+    let word: ReviewRescueWordSnapshot
+    let onPlayWord: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 14) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(word.english)
+                        .font(.system(size: 26, weight: .bold, design: .serif))
+                        .foregroundStyle(AppPalette.ink)
+                    Text(word.primaryChinese)
+                        .font(.system(size: 19, weight: .medium, design: .default))
+                        .foregroundStyle(AppPalette.muted)
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 8) {
+                    PillLabel(text: word.reminderCaption.uppercased(), tint: word.isDueNow ? AppPalette.error : AppPalette.blue, fill: word.isDueNow ? AppPalette.errorSoft : AppPalette.blueSoft)
+                    Text("\(word.stageIndex + 1)/\(word.stageCount)")
+                        .font(.system(size: 18, weight: .bold, design: .default))
+                        .foregroundStyle(AppPalette.terracotta)
+                }
+            }
+
+            HStack(spacing: 10) {
+                PillLabel(text: word.stageLabel, tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
+                PillLabel(text: word.weakPointText.uppercased(), tint: AppPalette.error, fill: AppPalette.errorSoft)
+            }
+
+            PronunciationButton(title: word.quickListenTitle, tint: AppPalette.blue, action: onPlayWord)
+
+            if word.exampleSentence != nil || word.exampleTranslation != nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Example")
+                        .font(.system(size: 14, weight: .bold, design: .default))
+                        .tracking(0.8)
+                        .foregroundStyle(AppPalette.muted)
+                    if let exampleSentence = word.exampleSentence {
+                        Text(exampleSentence)
+                            .font(.system(size: 18, weight: .medium, design: .serif))
+                            .italic()
+                            .foregroundStyle(AppPalette.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let exampleTranslation = word.exampleTranslation {
+                        Text(exampleTranslation)
+                            .font(.system(size: 16, weight: .medium, design: .default))
+                            .foregroundStyle(AppPalette.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color.white.opacity(0.72))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(AppPalette.border, lineWidth: 1.0)
+                )
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Meaning")
+                        .font(.system(size: 14, weight: .bold, design: .default))
+                        .tracking(0.8)
+                        .foregroundStyle(AppPalette.muted)
+                    Text(word.primaryChinese)
+                        .font(.system(size: 17, weight: .medium, design: .default))
+                        .foregroundStyle(AppPalette.ink)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color.white.opacity(0.72))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(AppPalette.border, lineWidth: 1.0)
+                )
+            }
+
+            if let memoryTip = word.memoryTip {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Memory Tip")
+                        .font(.system(size: 14, weight: .bold, design: .default))
+                        .tracking(0.8)
+                        .foregroundStyle(AppPalette.muted)
+                    Text(memoryTip)
+                        .font(.system(size: 17, weight: .medium, design: .default))
+                        .foregroundStyle(AppPalette.terracotta)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color.white.opacity(0.72))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(AppPalette.border, lineWidth: 1.0)
+                )
+            }
+        }
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(word.isDueNow ? AppPalette.errorSoft.opacity(0.55) : Color.white.opacity(0.72))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(word.isDueNow ? AppPalette.error.opacity(0.72) : AppPalette.border, lineWidth: 1.1)
+        )
     }
 }
 
@@ -3794,41 +4225,387 @@ struct TrophiesView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        let snapshot = model.trophiesSnapshot
+
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 SectionHero(
                     eyebrow: "TROPHIES",
-                    title: "Trophy Shelf",
-                    subtitle: "Every finished session becomes a trophy with score, misses, reminder words, and the next review strategy.",
-                    trailingText: "\(model.sessionHistory.count)"
+                    title: "Learning Map",
+                    subtitle: "A simple view of what has been done, what is due, and which PET page should come next.",
+                    trailingText: "\(snapshot.totalSessions)"
                 )
 
-                HStack(spacing: 12) {
-                    Button("BACK TO HOME") { model.openDashboard() }
-                        .buttonStyle(HeroButtonStyle(kind: .outlined))
-                        .frame(maxWidth: 280)
-                    Button("REVIEW") { model.openReview() }
-                        .buttonStyle(HeroButtonStyle(kind: .outlined))
-                        .frame(maxWidth: 240)
+                TrophyActionRow(
+                    onHome: { model.openMainSurface() },
+                    onReview: { model.openReview() },
+                    onReading: { model.openReading() }
+                )
+
+                TrophyMetricStrip(snapshot: snapshot)
+                TrophyPageMapCard(snapshot: snapshot)
+                TrophyMemoryPathCard(snapshot: snapshot)
+                TrophyHistoryList(sessions: snapshot.recentSessions)
+            }
+            .padding(.vertical, 6)
+        }
+    }
+}
+
+struct TrophyActionRow: View {
+    let onHome: () -> Void
+    let onReview: () -> Void
+    let onReading: () -> Void
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                Button("BACK TO HOME", action: onHome)
+                    .buttonStyle(SecondaryNavButtonStyle())
+                Button("REVIEW NOW", action: onReview)
+                    .buttonStyle(SecondaryNavButtonStyle())
+                Button("READING", action: onReading)
+                    .buttonStyle(SecondaryNavButtonStyle())
+                Spacer()
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Button("BACK TO HOME", action: onHome)
+                    .buttonStyle(SecondaryNavButtonStyle())
+                Button("REVIEW NOW", action: onReview)
+                    .buttonStyle(SecondaryNavButtonStyle())
+                Button("READING", action: onReading)
+                    .buttonStyle(SecondaryNavButtonStyle())
+            }
+        }
+    }
+}
+
+struct TrophyMetricStrip: View {
+    let snapshot: TrophiesSnapshot
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 16) {
+                TrophyOverviewMetricCard(
+                    title: "Today",
+                    value: "\(snapshot.completedTodayCount)",
+                    caption: "finished sessions",
+                    tint: AppPalette.terracotta
+                )
+                TrophyOverviewMetricCard(
+                    title: "Accuracy",
+                    value: "\(snapshot.averageAccuracyPercent)%",
+                    caption: "average trophy score",
+                    tint: AppPalette.blue
+                )
+                TrophyOverviewMetricCard(
+                    title: "Review",
+                    value: "\(snapshot.dueReviewCount)",
+                    caption: "words due now",
+                    tint: snapshot.dueReviewCount > 0 ? AppPalette.error : AppPalette.success
+                )
+                TrophyOverviewMetricCard(
+                    title: "Streak",
+                    value: "\(snapshot.dailyStreak)",
+                    caption: "learning days",
+                    tint: AppPalette.olive
+                )
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 14)], spacing: 14) {
+                TrophyOverviewMetricCard(
+                    title: "Today",
+                    value: "\(snapshot.completedTodayCount)",
+                    caption: "finished sessions",
+                    tint: AppPalette.terracotta
+                )
+                TrophyOverviewMetricCard(
+                    title: "Accuracy",
+                    value: "\(snapshot.averageAccuracyPercent)%",
+                    caption: "average trophy score",
+                    tint: AppPalette.blue
+                )
+                TrophyOverviewMetricCard(
+                    title: "Review",
+                    value: "\(snapshot.dueReviewCount)",
+                    caption: "words due now",
+                    tint: snapshot.dueReviewCount > 0 ? AppPalette.error : AppPalette.success
+                )
+                TrophyOverviewMetricCard(
+                    title: "Streak",
+                    value: "\(snapshot.dailyStreak)",
+                    caption: "learning days",
+                    tint: AppPalette.olive
+                )
+            }
+        }
+    }
+}
+
+struct TrophyOverviewMetricCard: View {
+    let title: String
+    let value: String
+    let caption: String
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title.uppercased())
+                .font(.system(size: 15, weight: .bold, design: .default))
+                .tracking(1.2)
+                .foregroundStyle(AppPalette.muted)
+
+            Text(value)
+                .font(.system(size: 42, weight: .bold, design: .serif))
+                .foregroundStyle(tint)
+
+            Text(caption)
+                .font(.system(size: 16, weight: .semibold, design: .default))
+                .foregroundStyle(AppPalette.muted)
+        }
+        .padding(22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(AppPalette.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(AppPalette.border, lineWidth: 1.1)
+        )
+    }
+}
+
+struct TrophyPageMapCard: View {
+    let snapshot: TrophiesSnapshot
+
+    private let columns = [GridItem(.adaptive(minimum: 58), spacing: 8)]
+
+    var body: some View {
+        SurfaceCard(title: "PAGE PROGRESS MAP") {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("PET pages 1-\(snapshot.totalPages)")
+                            .font(.system(size: 32, weight: .bold, design: .serif))
+                            .foregroundStyle(AppPalette.ink)
+                        Text("\(snapshot.questCompletedCount) Quest pages cleared · \(snapshot.readingCompletedCount) Reading pages cleared")
+                            .font(.system(size: 18, weight: .medium, design: .default))
+                            .foregroundStyle(AppPalette.muted)
+                    }
+
+                    Spacer()
+
+                    FlowLayout(spacing: 8) {
+                        TrophyLegendPill(text: "Current", tint: AppPalette.olive, fill: AppPalette.oliveSoft)
+                        TrophyLegendPill(text: "Done", tint: AppPalette.success, fill: AppPalette.successSoft)
+                        TrophyLegendPill(text: "Review", tint: AppPalette.error, fill: AppPalette.errorSoft)
+                        TrophyLegendPill(text: "Quest", tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
+                    }
+                    .frame(maxWidth: 420, alignment: .trailing)
                 }
 
-                if model.sessionHistory.isEmpty {
-                    SurfaceCard {
-                        ContentUnavailableView(
-                            "No trophies yet",
-                            systemImage: "trophy",
-                            description: Text("Complete a placement test, mission, or review rescue to start filling the trophy shelf.")
-                        )
+                LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+                    ForEach(snapshot.pageStatuses) { page in
+                        TrophyPageCell(page: page)
                     }
+                }
+            }
+        }
+    }
+}
+
+struct TrophyLegendPill: View {
+    let text: String
+    let tint: Color
+    let fill: Color
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(tint)
+                .frame(width: 8, height: 8)
+            Text(text)
+                .font(.system(size: 13, weight: .bold, design: .default))
+                .foregroundStyle(tint)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(fill)
+        .clipShape(Capsule())
+    }
+}
+
+struct TrophyPageCell: View {
+    let page: TrophiesPageStatusSnapshot
+
+    var body: some View {
+        VStack(spacing: 3) {
+            Text("\(page.pageNumber)")
+                .font(.system(size: 17, weight: .bold, design: .default))
+                .foregroundStyle(primaryTint)
+            Text(statusLabel)
+                .font(.system(size: 9, weight: .bold, design: .default))
+                .foregroundStyle(primaryTint.opacity(page.isBaseReady || page.isQuestEnhanced || page.isReadingReady ? 0.88 : 0.5))
+        }
+        .frame(width: 58, height: 52)
+        .background(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .fill(backgroundFill)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .stroke(borderTint, lineWidth: page.isCurrent ? 2.0 : 1.0)
+        )
+    }
+
+    private var statusLabel: String {
+        if page.isQuestCompleted && page.isReadingCompleted { return "DONE" }
+        if page.hasReviewDue { return "REVIEW" }
+        if page.isCurrent { return "NOW" }
+        if page.isQuestEnhanced { return "QUEST" }
+        if page.isBaseReady { return "BASE" }
+        if page.isReadingReady { return "READ" }
+        return "WAIT"
+    }
+
+    private var primaryTint: Color {
+        if page.isQuestCompleted && page.isReadingCompleted { return AppPalette.success }
+        if page.hasReviewDue { return AppPalette.error }
+        if page.isCurrent { return AppPalette.olive }
+        if page.isQuestEnhanced { return AppPalette.terracotta }
+        if page.isBaseReady || page.isReadingReady { return AppPalette.blue }
+        return AppPalette.muted.opacity(0.55)
+    }
+
+    private var borderTint: Color {
+        if page.isCurrent { return AppPalette.olive }
+        return primaryTint.opacity(page.isBaseReady || page.isQuestEnhanced || page.isReadingReady || page.hasReviewDue ? 0.72 : 0.22)
+    }
+
+    private var backgroundFill: Color {
+        if page.isQuestCompleted && page.isReadingCompleted { return AppPalette.successSoft }
+        if page.hasReviewDue { return AppPalette.errorSoft }
+        if page.isCurrent { return AppPalette.oliveSoft }
+        if page.isQuestEnhanced { return AppPalette.oliveSoft.opacity(0.78) }
+        if page.isBaseReady || page.isReadingReady { return AppPalette.blueSoft.opacity(0.8) }
+        return Color.white.opacity(0.62)
+    }
+}
+
+struct TrophyMemoryPathCard: View {
+    let snapshot: TrophiesSnapshot
+
+    var body: some View {
+        SurfaceCard(title: "MISTAKES & MEMORY CURVE") {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("Due now")
+                        .font(.system(size: 34, weight: .bold, design: .serif))
+                        .foregroundStyle(AppPalette.ink)
+                    PillLabel(
+                        text: "\(snapshot.dueReviewCount)",
+                        tint: snapshot.dueReviewCount > 0 ? AppPalette.error : AppPalette.success,
+                        fill: snapshot.dueReviewCount > 0 ? AppPalette.errorSoft : AppPalette.successSoft
+                    )
+                }
+
+                Text(snapshot.dueReviewCount == 0
+                     ? "No urgent review words right now. New mistakes will appear here on the Ebbinghaus schedule."
+                     : "Start with a small rescue sprint. These words are due now, not a punishment queue.")
+                    .font(.system(size: 18, weight: .medium, design: .default))
+                    .foregroundStyle(AppPalette.muted)
+
+                if snapshot.memoryWords.isEmpty {
+                    Text(ReviewScheduler.strategyDescription)
+                        .font(.system(size: 17, weight: .medium, design: .default))
+                        .foregroundStyle(AppPalette.terracotta)
+                } else {
+                    VStack(spacing: 10) {
+                        ForEach(snapshot.memoryWords) { word in
+                            TrophyMemoryWordCard(word: word)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct TrophyMemoryWordCard: View {
+    let word: ReviewRescueWordSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(word.english)
+                        .font(.system(size: 26, weight: .bold, design: .serif))
+                        .foregroundStyle(AppPalette.ink)
+                    Text(word.primaryChinese)
+                        .font(.system(size: 18, weight: .semibold, design: .default))
+                        .foregroundStyle(AppPalette.muted)
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 8) {
+                    PillLabel(text: word.reminderCaption, tint: AppPalette.terracotta, fill: AppPalette.oliveSoft)
+                    PillLabel(text: word.weakPointText.uppercased(), tint: AppPalette.error, fill: AppPalette.errorSoft)
+                }
+            }
+
+            if let memoryTip = word.memoryTip {
+                Text("Memory Tip")
+                    .font(.system(size: 14, weight: .bold, design: .default))
+                    .foregroundStyle(AppPalette.muted)
+                Text(memoryTip)
+                    .font(.system(size: 17, weight: .semibold, design: .default))
+                    .foregroundStyle(AppPalette.terracotta)
+            }
+        }
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(AppPalette.errorSoft.opacity(0.34))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(AppPalette.error.opacity(0.42), lineWidth: 1.0)
+        )
+    }
+}
+
+struct TrophyHistoryList: View {
+    let sessions: [SessionSummary]
+
+    var body: some View {
+        SurfaceCard(title: "PRACTICE HISTORY") {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Text("Latest trophies")
+                        .font(.system(size: 32, weight: .bold, design: .serif))
+                        .foregroundStyle(AppPalette.ink)
+                    Spacer()
+                    PillLabel(text: "\(sessions.count) shown", tint: AppPalette.blue, fill: AppPalette.blueSoft)
+                }
+
+                if sessions.isEmpty {
+                    ContentUnavailableView(
+                        "No trophies yet",
+                        systemImage: "trophy",
+                        description: Text("Complete a placement test, Quest, Reading, or Review Rescue to start filling the trophy shelf.")
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 180)
                 } else {
                     VStack(spacing: 12) {
-                        ForEach(model.sessionHistory, id: \.id) { summary in
+                        ForEach(sessions, id: \.id) { summary in
                             TrophySessionCard(summary: summary)
                         }
                     }
                 }
             }
-            .padding(.vertical, 6)
         }
     }
 }
@@ -4797,6 +5574,10 @@ struct ReadingQuizView: View {
 }
 
 struct CatCelebrationCard: View {
+    var title = "Cat cheer unlocked"
+    var message = "A playful cat now celebrates every finished practice session so the ending feels rewarding, not abrupt."
+    var footnote = "The animation stays local, lightweight, and non-blocking."
+
     @State private var animate = false
 
     var body: some View {
@@ -4826,13 +5607,13 @@ struct CatCelebrationCard: View {
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Cat cheer unlocked")
+                    Text(title)
                         .font(.system(size: 34, weight: .bold, design: .serif))
                         .foregroundStyle(AppPalette.ink)
-                    Text("A playful cat now celebrates every finished practice session so the ending feels rewarding, not abrupt.")
+                    Text(message)
                         .font(.system(size: 20, weight: .medium, design: .default))
                         .foregroundStyle(AppPalette.muted)
-                    Text("The animation stays local, lightweight, and non-blocking.")
+                    Text(footnote)
                         .font(.system(size: 17, weight: .medium, design: .default))
                         .foregroundStyle(AppPalette.terracotta)
                 }

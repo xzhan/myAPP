@@ -22,10 +22,10 @@ enum PronunciationAssessment {
             .map { similarity(between: $0, and: target) }
             .max() ?? 0
 
-        if bestSimilarity >= 0.9 {
+        if bestSimilarity >= 0.92 {
             return .clear
         }
-        if bestSimilarity >= 0.72 {
+        if bestSimilarity >= 0.60 {
             return .almostThere
         }
         return .needsPractice

@@ -1,11 +1,29 @@
 import AVFoundation
+import AppKit
 import Combine
 import Foundation
 import Speech
 
+enum PronunciationPermissionStatus: Equatable, Sendable {
+    case authorized
+    case denied
+    case restricted
+    case unavailable
+
+    var isAuthorized: Bool {
+        self == .authorized
+    }
+}
+
+struct PronunciationPermissionRecovery: Equatable {
+    let title: String
+    let detail: String
+    let settingsURL: URL
+}
+
 struct PronunciationPermissionProvider {
-    var requestSpeechAuthorization: @Sendable () async -> Bool
-    var requestMicrophoneAuthorization: @Sendable () async -> Bool
+    var requestSpeechAuthorization: @Sendable () async -> PronunciationPermissionStatus
+    var requestMicrophoneAuthorization: @Sendable () async -> PronunciationPermissionStatus
 
     static let live = PronunciationPermissionProvider(
         requestSpeechAuthorization: {
@@ -48,28 +66,41 @@ enum PronunciationAudioTap {
 }
 
 private enum PronunciationSystemPermissionBroker {
-    nonisolated static func requestSpeechAuthorization() async -> Bool {
+    nonisolated static func requestSpeechAuthorization() async -> PronunciationPermissionStatus {
         await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { status in
-                continuation.resume(returning: status == .authorized)
+                switch status {
+                case .authorized:
+                    continuation.resume(returning: .authorized)
+                case .denied:
+                    continuation.resume(returning: .denied)
+                case .restricted:
+                    continuation.resume(returning: .restricted)
+                case .notDetermined:
+                    continuation.resume(returning: .unavailable)
+                @unknown default:
+                    continuation.resume(returning: .unavailable)
+                }
             }
         }
     }
 
-    nonisolated static func requestMicrophoneAuthorization() async -> Bool {
+    nonisolated static func requestMicrophoneAuthorization() async -> PronunciationPermissionStatus {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
-            return true
+            return .authorized
         case .notDetermined:
             return await withCheckedContinuation { continuation in
                 AVCaptureDevice.requestAccess(for: .audio) { isAllowed in
-                    continuation.resume(returning: isAllowed)
+                    continuation.resume(returning: isAllowed ? .authorized : .denied)
                 }
             }
-        case .denied, .restricted:
-            return false
+        case .denied:
+            return .denied
+        case .restricted:
+            return .restricted
         @unknown default:
-            return false
+            return .unavailable
         }
     }
 }
@@ -88,6 +119,7 @@ final class PronunciationSpeechCoach: NSObject, ObservableObject {
     @Published private(set) var state: CoachState = .idle
     @Published private(set) var transcript = ""
     @Published private(set) var rating: PronunciationRating?
+    @Published private(set) var permissionRecovery: PronunciationPermissionRecovery?
     @Published private(set) var message = "Tap Start Speaking, say the word clearly, then let the cat check."
 
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -115,20 +147,23 @@ final class PronunciationSpeechCoach: NSObject, ObservableObject {
         message = "Checking microphone permission..."
 
         Task {
-            let hasSpeechAccess = await permissionProvider.requestSpeechAuthorization()
-            let hasMicrophoneAccess = await permissionProvider.requestMicrophoneAuthorization()
+            let speechStatus = await permissionProvider.requestSpeechAuthorization()
+            let microphoneStatus = await permissionProvider.requestMicrophoneAuthorization()
 
-            guard hasSpeechAccess, hasMicrophoneAccess else {
-                state = .unavailable
-                message = "Microphone or speech permission is not available. You can still self-check below."
+            guard speechStatus.isAuthorized, microphoneStatus.isAuthorized else {
+                configureUnavailablePermissionState(speechStatus: speechStatus, microphoneStatus: microphoneStatus)
                 return
             }
+
+            permissionRecovery = nil
 
             do {
                 try startRecognition(targetWord: targetWord)
             } catch {
                 state = .unavailable
+                permissionRecovery = nil
                 message = "Speech check could not start. You can still self-check below."
+                return
             }
         }
     }
@@ -154,6 +189,7 @@ final class PronunciationSpeechCoach: NSObject, ObservableObject {
         stopAudio()
         transcript = ""
         rating = nil
+        permissionRecovery = nil
         state = .idle
         message = "Tap Start Speaking, say the word clearly, then let the cat check."
     }
@@ -166,6 +202,42 @@ final class PronunciationSpeechCoach: NSObject, ObservableObject {
         stopAudio()
         transcript = ""
         rating = nil
+        permissionRecovery = nil
+    }
+
+    func openPermissionSettings() {
+        guard let permissionRecovery else { return }
+        NSWorkspace.shared.open(permissionRecovery.settingsURL)
+    }
+
+    private func configureUnavailablePermissionState(
+        speechStatus: PronunciationPermissionStatus,
+        microphoneStatus: PronunciationPermissionStatus
+    ) {
+        state = .unavailable
+
+        if microphoneStatus == .denied || microphoneStatus == .restricted {
+            permissionRecovery = PronunciationPermissionRecovery(
+                title: "Open Microphone Settings",
+                detail: "Turn on PETVocabularyTrainer in System Settings > Privacy & Security > Microphone, then return here and tap Check Again.",
+                settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!
+            )
+            message = "Microphone access is off. Open System Settings to allow it, then come back and try again."
+            return
+        }
+
+        if speechStatus == .denied || speechStatus == .restricted {
+            permissionRecovery = PronunciationPermissionRecovery(
+                title: "Open Speech Recognition Settings",
+                detail: "Turn on PETVocabularyTrainer in System Settings > Privacy & Security > Speech Recognition, then return here and tap Check Again.",
+                settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition")!
+            )
+            message = "Speech Recognition access is off. Open System Settings to allow it, then come back and try again."
+            return
+        }
+
+        permissionRecovery = nil
+        message = "Microphone or speech permission is not available. You can still self-check below."
     }
 
     private func startRecognition(targetWord: String) throws {
@@ -242,11 +314,11 @@ final class PronunciationSpeechCoach: NSObject, ObservableObject {
     private func feedbackMessage(for rating: PronunciationRating?) -> String {
         switch rating {
         case .clear:
-            return "Great pronunciation. The cat is happy."
+            return "Great! Cat heard the word clearly."
         case .almostThere:
-            return "Almost there. Try once more or continue with a reminder."
+            return "Nice! Cat almost heard it. Let's keep going."
         case .needsPractice:
-            return "The cat could not hear it clearly yet. Try again, or continue and review later."
+            return "Cat did not hear it clearly. Maybe the mic missed it. Try once more."
         case nil:
             return "The cat could not check this attempt. Try again or self-check below."
         }
