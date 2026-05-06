@@ -12,6 +12,11 @@ A native macOS SwiftUI vocabulary trainer prototype focused on English -> Chines
 - coach-style feedback after each session
 - review queue and history views
 
+## User Guides
+
+- 中文使用说明书: `docs/user-guide-zh.md`
+- English user guide: `docs/user-guide-en.md`
+
 ## Current scope
 
 This prototype now ships with a built-in PET-style core list of 140 words in `Sources/PETVocabularyTrainer/Resources/pet_words.json`.
