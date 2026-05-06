@@ -7,6 +7,22 @@ import Testing
 @testable import PETVocabularyTrainer
 
 struct PETVocabularyTrainerTests {
+    @MainActor
+    private final class FakeReviewNotificationScheduler: ReviewNotificationScheduling {
+        var authorizationResult = true
+        var requestedAuthorizationCount = 0
+        var appliedPlans: [ReviewNotificationPlan?] = []
+
+        func requestAuthorization() async -> Bool {
+            requestedAuthorizationCount += 1
+            return authorizationResult
+        }
+
+        func apply(plan: ReviewNotificationPlan?) async {
+            appliedPlans.append(plan)
+        }
+    }
+
     private static func isolatedStore() -> LocalStore {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -29,7 +45,16 @@ struct PETVocabularyTrainerTests {
     @Test func pronunciationAssessmentRatesRecognizedSpeechAgainstTargetWord() {
         #expect(PronunciationAssessment.rate(spokenText: "influence", targetWord: "influence") == .clear)
         #expect(PronunciationAssessment.rate(spokenText: "influnce", targetWord: "influence") == .almostThere)
+        #expect(PronunciationAssessment.rate(spokenText: "argum", targetWord: "argument") == .almostThere)
         #expect(PronunciationAssessment.rate(spokenText: "teacher", targetWord: "influence") == .needsPractice)
+    }
+
+    @Test func pronunciationRatingUsesGentleHeartFeedback() {
+        #expect(PronunciationRating.clear.heartMeter == "❤️❤️❤️")
+        #expect(PronunciationRating.almostThere.heartMeter == "🤍❤️❤️")
+        #expect(PronunciationRating.needsPractice.heartMeter == "🤍🤍❤️")
+        #expect(PronunciationRating.almostThere.feedbackLabel == "Almost heard")
+        #expect(PronunciationRating.almostThere.countsAsStrong == true)
     }
 
     @Test func pronunciationAssessmentFindsTargetInsideRecognizerPhrase() {
@@ -42,8 +67,8 @@ struct PETVocabularyTrainerTests {
     @Test func pronunciationSpeechCoachFallsBackWhenPermissionIsUnavailable() async throws {
         let coach = PronunciationSpeechCoach(
             permissionProvider: PronunciationPermissionProvider(
-                requestSpeechAuthorization: { false },
-                requestMicrophoneAuthorization: { true }
+                requestSpeechAuthorization: { .unavailable },
+                requestMicrophoneAuthorization: { .authorized }
             )
         )
 
@@ -52,6 +77,23 @@ struct PETVocabularyTrainerTests {
         try await Self.waitForCondition { coach.state == .unavailable }
         #expect(coach.rating == nil)
         #expect(coach.message.contains("self-check"))
+    }
+
+    @MainActor
+    @Test func pronunciationSpeechCoachGuidesUserToSettingsAfterMicrophoneDenied() async throws {
+        let coach = PronunciationSpeechCoach(
+            permissionProvider: PronunciationPermissionProvider(
+                requestSpeechAuthorization: { .authorized },
+                requestMicrophoneAuthorization: { .denied }
+            )
+        )
+
+        coach.start(targetWord: "influence")
+
+        try await Self.waitForCondition { coach.state == .unavailable }
+        #expect(coach.permissionRecovery?.title == "Open Microphone Settings")
+        #expect(coach.permissionRecovery?.settingsURL.absoluteString.contains("Privacy_Microphone") == true)
+        #expect(coach.message.contains("System Settings"))
     }
 
     @Test func pronunciationAudioInputValidationRejectsInvalidHeadsetFormats() {
@@ -73,6 +115,25 @@ struct PETVocabularyTrainerTests {
         }
 
         request.endAudio()
+    }
+
+    @Test func swiftRunExecutableEmbedsSpeechPrivacyInfoPlist() throws {
+        let testFileURL = URL(fileURLWithPath: #filePath)
+        let packageRoot = testFileURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let packageManifest = try String(
+            contentsOf: packageRoot.appendingPathComponent("Package.swift"),
+            encoding: .utf8
+        )
+        let infoPlistURL = packageRoot.appendingPathComponent("Sources/PETVocabularyTrainer/Info.plist")
+        let infoPlist = try String(contentsOf: infoPlistURL, encoding: .utf8)
+
+        #expect(packageManifest.contains("__info_plist"))
+        #expect(packageManifest.contains("Sources/PETVocabularyTrainer/Info.plist"))
+        #expect(infoPlist.contains("NSMicrophoneUsageDescription"))
+        #expect(infoPlist.contains("NSSpeechRecognitionUsageDescription"))
     }
 
     @Test func petPDFWordParserHandlesWrappedPETEntries() throws {
@@ -1370,6 +1431,57 @@ struct PETVocabularyTrainerTests {
     }
 
     @MainActor
+    @Test func appModelAcceptsOptionalParentheticalLettersInSpellingAnswers() {
+        func makeModel() -> AppModel {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                .appendingPathComponent("store.json")
+            let model = AppModel(store: LocalStore(url: url))
+            model.words = [
+                VocabularyWord(id: "w1", english: "blond(e)", primaryChinese: "金发的", topic: .people),
+                VocabularyWord(id: "w2", english: "teacher", primaryChinese: "老师", topic: .school),
+                VocabularyWord(id: "w3", english: "cinema", primaryChinese: "电影院", topic: .places),
+                VocabularyWord(id: "w4", english: "ticket", primaryChinese: "票", topic: .transport)
+            ]
+            model.data.progressByWordID["w1"] = .fresh(for: "w1")
+            model.data.activeSession = ActiveSession(
+                mode: .mission,
+                questions: [
+                    PersistedQuestion(
+                        wordID: "w1",
+                        choices: ["金发的", "老师", "电影院", "票"],
+                        style: .wordExercise,
+                        exampleSentence: "The blond girl smiled.",
+                        meaningPrompt: "The blond girl smiled.",
+                        meaningCorrectChoice: "金发的",
+                        spellingPromptText: "金发的: ___",
+                        spellingCorrectAnswer: "blond(e)"
+                    )
+                ]
+            )
+            return model
+        }
+
+        let blondModel = makeModel()
+        blondModel.submit(choice: "金发的")
+        blondModel.submitPronunciationRating(.clear)
+        blondModel.submitSpelling(answer: "Blond")
+
+        #expect(blondModel.answerFeedback?.spellingWasCorrect == true)
+        #expect(blondModel.answerFeedback?.isCorrect == true)
+        #expect(blondModel.data.progressByWordID["w1"]?.retryMissCount == 0)
+
+        let blondeModel = makeModel()
+        blondeModel.submit(choice: "金发的")
+        blondeModel.submitPronunciationRating(.clear)
+        blondeModel.submitSpelling(answer: "blonde")
+
+        #expect(blondeModel.answerFeedback?.spellingWasCorrect == true)
+        #expect(blondeModel.answerFeedback?.isCorrect == true)
+        #expect(blondeModel.data.progressByWordID["w1"]?.retryMissCount == 0)
+    }
+
+    @MainActor
     @Test func appModelQuestWordExerciseOnlyGradesAfterTranslationStep() {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1909,7 +2021,13 @@ struct PETVocabularyTrainerTests {
             ImportedWordPage(pageNumber: 14, title: "PET全_Page_14", wordIDs: ["director"], sourceFilename: "PET全.pdf")
         ]
         model.data.questPages = [
-            QuestPage(pageNumber: 14, title: "PET全_Page_14", questions: [])
+            QuestPage(
+                pageNumber: 14,
+                title: "PET全_Page_14",
+                questions: [
+                    PersistedQuestion(wordID: "review-0", choices: ["词0", "词1", "词2", "词3"], style: .wordExercise)
+                ]
+            )
         ]
         model.data.currentQuestPageNumber = 14
         model.data.readingLibrary = ReadingLibraryMetadata(name: "PET Reading", importedAt: .now, articleCount: 66)
@@ -1949,6 +2067,183 @@ struct PETVocabularyTrainerTests {
         #expect(snapshot.importActionTitle == "MANAGE RESOURCES")
         #expect(snapshot.resources.map(\.title) == ["Base", "Quest", "Reading"])
         #expect(snapshot.resources.map(\.valueText) == ["1", "1", "66"])
+    }
+
+    @MainActor
+    @Test func homeMissionQuestStepNudgesDueReviewWithoutBlockingDailyQuest() {
+        let now = Date(timeIntervalSinceReferenceDate: 300_000)
+        let model = AppModel(store: Self.isolatedStore())
+        model.words = (0..<8).map { index in
+            VocabularyWord(
+                id: "review-\(index)",
+                english: "word\(index)",
+                primaryChinese: "词\(index)",
+                topic: .school
+            )
+        }
+        model.data.activeWordBankMode = .imported
+        model.data.wordPages = [
+            ImportedWordPage(
+                pageNumber: 14,
+                title: "PET全_Page_14",
+                wordIDs: model.words.map(\.id),
+                sourceFilename: "PET全.pdf"
+            )
+        ]
+        model.data.questPages = [
+            QuestPage(
+                pageNumber: 14,
+                title: "PET全_Page_14",
+                questions: [
+                    PersistedQuestion(wordID: "review-0", choices: ["词0", "词1", "词2", "词3"], style: .wordExercise)
+                ]
+            )
+        ]
+        model.data.currentQuestPageNumber = 14
+        for (index, word) in model.words.enumerated() {
+            model.data.progressByWordID[word.id] = WordProgress(
+                wordID: word.id,
+                currentCorrectStreak: 0,
+                totalCorrect: 1,
+                totalIncorrect: 2,
+                isMastered: false,
+                lastSeenAt: now.addingTimeInterval(-3_600),
+                lastIncorrectAt: now.addingTimeInterval(-3_600),
+                reviewPriority: 8 - index,
+                reviewStep: 0,
+                nextReviewAt: now.addingTimeInterval(-Double(index + 1) * 60)
+            )
+        }
+
+        let snapshot = model.homeMissionSnapshot
+        let questStep = snapshot.steps[1]
+
+        #expect(model.currentUnitSnapshot.primaryAction == .startMission)
+        #expect(questStep.statusText == "MAIN TASK")
+        #expect(questStep.detail.contains("Step 4 has 5 due review words"))
+        #expect(questStep.actionTitle == "START WORD QUEST")
+        #expect(model.homeQuestActionTitle == "START WORD QUEST")
+
+        model.performHomeQuestAction()
+
+        #expect(model.currentSession?.mode == .mission)
+    }
+
+    @MainActor
+    @Test func homeMissionQuestStepResumesEmptyDailySessionEvenWhenReviewsAreDue() {
+        let now = Date(timeIntervalSinceReferenceDate: 300_000)
+        let model = AppModel(store: Self.isolatedStore())
+        model.words = (0..<6).map { index in
+            VocabularyWord(
+                id: "empty-review-\(index)",
+                english: "word\(index)",
+                primaryChinese: "词\(index)",
+                topic: .school
+            )
+        }
+        model.data.activeWordBankMode = .imported
+        model.data.wordPages = [
+            ImportedWordPage(
+                pageNumber: 14,
+                title: "PET全_Page_14",
+                wordIDs: model.words.map(\.id),
+                sourceFilename: "PET全.pdf"
+            )
+        ]
+        model.data.questPages = [
+            QuestPage(pageNumber: 14, title: "PET全_Page_14", questions: [])
+        ]
+        model.data.currentQuestPageNumber = 14
+        for (index, word) in model.words.enumerated() {
+            model.data.progressByWordID[word.id] = WordProgress(
+                wordID: word.id,
+                currentCorrectStreak: 0,
+                totalCorrect: 1,
+                totalIncorrect: 2,
+                isMastered: false,
+                lastSeenAt: now.addingTimeInterval(-3_600),
+                lastIncorrectAt: now.addingTimeInterval(-3_600),
+                reviewPriority: 6 - index,
+                reviewStep: 0,
+                nextReviewAt: now.addingTimeInterval(-Double(index + 1) * 60)
+            )
+        }
+        model.data.activeSession = ActiveSession(
+            mode: .mission,
+            questions: [
+                PersistedQuestion(wordID: "empty-review-0", choices: ["词0", "词1", "词2", "词3"], style: .wordExercise)
+            ]
+        )
+
+        #expect(model.homeQuestActionTitle == "RESUME DAILY MISSION")
+
+        model.performHomeQuestAction()
+
+        #expect(model.currentSession?.mode == .mission)
+    }
+
+    @MainActor
+    @Test func homeMissionQuestStepPreservesStartedDailySessionEvenWhenReviewsAreDue() {
+        let now = Date(timeIntervalSinceReferenceDate: 300_000)
+        let model = AppModel(store: Self.isolatedStore())
+        model.words = (0..<6).map { index in
+            VocabularyWord(
+                id: "started-review-\(index)",
+                english: "word\(index)",
+                primaryChinese: "词\(index)",
+                topic: .school
+            )
+        }
+        model.data.activeWordBankMode = .imported
+        model.data.wordPages = [
+            ImportedWordPage(
+                pageNumber: 14,
+                title: "PET全_Page_14",
+                wordIDs: model.words.map(\.id),
+                sourceFilename: "PET全.pdf"
+            )
+        ]
+        model.data.questPages = [
+            QuestPage(pageNumber: 14, title: "PET全_Page_14", questions: [])
+        ]
+        model.data.currentQuestPageNumber = 14
+        for (index, word) in model.words.enumerated() {
+            model.data.progressByWordID[word.id] = WordProgress(
+                wordID: word.id,
+                currentCorrectStreak: 0,
+                totalCorrect: 1,
+                totalIncorrect: 2,
+                isMastered: false,
+                lastSeenAt: now.addingTimeInterval(-3_600),
+                lastIncorrectAt: now.addingTimeInterval(-3_600),
+                reviewPriority: 6 - index,
+                reviewStep: 0,
+                nextReviewAt: now.addingTimeInterval(-Double(index + 1) * 60)
+            )
+        }
+        model.data.activeSession = ActiveSession(
+            mode: .mission,
+            questions: [
+                PersistedQuestion(wordID: "started-review-0", choices: ["词0", "词1", "词2", "词3"], style: .wordExercise)
+            ],
+            currentIndex: 1,
+            attempts: [
+                AttemptRecord(
+                    sessionID: "started-session",
+                    wordID: "started-review-0",
+                    selectedChoice: "词0",
+                    correctChoice: "词0",
+                    isCorrect: true,
+                    topic: .school
+                )
+            ]
+        )
+
+        #expect(model.homeQuestActionTitle == "RESUME DAILY MISSION")
+
+        model.performHomeQuestAction()
+
+        #expect(model.currentSession?.mode == .mission)
     }
 
     @MainActor
@@ -2537,6 +2832,31 @@ struct PETVocabularyTrainerTests {
         #expect(summary.recommendedMissionTitle.contains("school"))
     }
 
+    @Test func feedbackGeneratorLabelsFailedReviewAsRescueSprint() {
+        let session = ActiveSession(
+            mode: .failedReview,
+            questions: (0..<5).map { index in
+                PersistedQuestion(wordID: "word-\(index)", choices: ["A", "B", "C", "D"])
+            },
+            currentIndex: 5,
+            correctAnswers: 4,
+            attempts: [
+                AttemptRecord(sessionID: "s1", wordID: "word-0", selectedChoice: "A", correctChoice: "A", isCorrect: true, topic: .school),
+                AttemptRecord(sessionID: "s1", wordID: "word-1", selectedChoice: "A", correctChoice: "A", isCorrect: true, topic: .school),
+                AttemptRecord(sessionID: "s1", wordID: "word-2", selectedChoice: "A", correctChoice: "A", isCorrect: true, topic: .school),
+                AttemptRecord(sessionID: "s1", wordID: "word-3", selectedChoice: "A", correctChoice: "A", isCorrect: true, topic: .school),
+                AttemptRecord(sessionID: "s1", wordID: "word-4", selectedChoice: "B", correctChoice: "A", isCorrect: false, topic: .school)
+            ]
+        )
+
+        let summary = FeedbackGenerator.makeSummary(from: session, wordsByID: [:])
+
+        #expect(summary.headline == "Rescue sprint cleared")
+        #expect(summary.body.contains("rescued 4 of 5"))
+        #expect(summary.body.contains("small win"))
+        #expect(summary.recommendedMissionTitle == "Choose next rescue step")
+    }
+
     @Test func placementSummaryIncludesEstimatedVocabularyLanguage() {
         let session = ActiveSession(
             mode: .placement,
@@ -2701,7 +3021,9 @@ struct PETVocabularyTrainerTests {
                         wordID: "w1",
                         choices: ["借入", "归还", "老师", "学校"],
                         style: .wordExercise,
-                        memoryTip: "Borrow sounds like bringing a book back later."
+                        exampleSentence: "May I borrow your dictionary?",
+                        memoryTip: "Borrow sounds like bringing a book back later.",
+                        exampleTranslation: "我可以借用你的词典吗？"
                     )
                 ]
             )
@@ -2711,6 +3033,120 @@ struct PETVocabularyTrainerTests {
 
         #expect(reviewWord.english == "borrow")
         #expect(reviewWord.memoryTip == "Borrow sounds like bringing a book back later.")
+        #expect(reviewWord.exampleSentence == "May I borrow your dictionary?")
+        #expect(reviewWord.exampleTranslation == "我可以借用你的词典吗？")
+
+        let rescueWord = try #require(model.reviewRescueSnapshot.dueNow.words.first)
+        #expect(rescueWord.exampleSentence == "May I borrow your dictionary?")
+        #expect(rescueWord.exampleTranslation == "我可以借用你的词典吗？")
+    }
+
+    @MainActor
+    @Test func trophiesSnapshotSummarizesOverviewPageMapAndMemoryPath() throws {
+        let model = AppModel(store: Self.isolatedStore())
+        let now = Date.now
+        model.words = [
+            VocabularyWord(id: "w1", english: "borrow", primaryChinese: "借入", topic: .school),
+            VocabularyWord(id: "w2", english: "cinema", primaryChinese: "电影院", topic: .places)
+        ]
+        model.data.activeWordBankMode = .imported
+        model.data.dailyStreak = 4
+        model.data.currentQuestPageNumber = 14
+        model.data.wordPages = [
+            ImportedWordPage(pageNumber: 14, title: "PET全_Page_14", wordIDs: ["w1", "w2"], sourceFilename: "PET全.pdf")
+        ]
+        model.data.questPages = [
+            QuestPage(
+                pageNumber: 14,
+                title: "PET全_Page_14_Quest",
+                questions: [
+                    PersistedQuestion(
+                        wordID: "w1",
+                        choices: ["借入", "归还", "老师", "学校"],
+                        style: .wordExercise,
+                        exampleSentence: "May I borrow your dictionary?",
+                        memoryTip: "Borrow sounds like bringing a book back later.",
+                        exampleTranslation: "我可以借用你的词典吗？",
+                        sourcePageNumber: 14,
+                        sourcePageTitle: "PET全_Page_14_Quest"
+                    )
+                ]
+            )
+        ]
+        model.data.readingQuests = [
+            ReadingQuest(
+                id: "reading-14",
+                title: "Reading Quest: PET全_Page_14",
+                pageNumber: 14,
+                passage: "A short reading passage.",
+                questions: [],
+                sourceFilename: "reading-page-14.txt"
+            )
+        ]
+        model.data.completedQuestPages = [14]
+        model.data.completedReadingQuestPages = [14]
+        model.data.sessions = [
+            SessionSummary(
+                mode: .mission,
+                startedAt: now.addingTimeInterval(-900),
+                completedAt: now,
+                questPageNumber: 14,
+                questPageTitle: "PET全_Page_14_Quest",
+                totalQuestions: 10,
+                correctAnswers: 9,
+                newlyMasteredCount: 2,
+                weakTopics: [],
+                headline: "Page 14 cleared",
+                body: "Great progress.",
+                recommendedMissionTitle: "Continue Reading"
+            ),
+            SessionSummary(
+                mode: .readingQuest,
+                startedAt: now.addingTimeInterval(-172_800),
+                completedAt: now.addingTimeInterval(-172_500),
+                questPageNumber: 13,
+                questPageTitle: "Reading Quest: PET全_Page_13",
+                totalQuestions: 10,
+                correctAnswers: 6,
+                newlyMasteredCount: 0,
+                weakTopics: [.school],
+                headline: "Reading complete",
+                body: "Keep practicing.",
+                recommendedMissionTitle: "Review missed words"
+            )
+        ]
+        model.data.progressByWordID["w1"] = WordProgress(
+            wordID: "w1",
+            currentCorrectStreak: 0,
+            totalCorrect: 1,
+            totalIncorrect: 2,
+            retryMissCount: 1,
+            isMastered: false,
+            lastSeenAt: now,
+            lastIncorrectAt: now,
+            reviewPriority: 3,
+            reviewStep: 1,
+            nextReviewAt: now.addingTimeInterval(-60)
+        )
+
+        let snapshot = model.trophiesSnapshot
+        let page14 = try #require(snapshot.pageStatuses.first(where: { $0.pageNumber == 14 }))
+
+        #expect(snapshot.totalSessions == 2)
+        #expect(snapshot.completedTodayCount == 1)
+        #expect(snapshot.averageAccuracyPercent == 75)
+        #expect(snapshot.dueReviewCount == 1)
+        #expect(snapshot.dailyStreak == 4)
+        #expect(snapshot.questCompletedCount == 1)
+        #expect(snapshot.readingCompletedCount == 1)
+        #expect(page14.isCurrent)
+        #expect(page14.isBaseReady)
+        #expect(page14.isQuestEnhanced)
+        #expect(page14.isQuestCompleted)
+        #expect(page14.isReadingReady)
+        #expect(page14.isReadingCompleted)
+        #expect(page14.hasReviewDue)
+        #expect(snapshot.memoryWords.first?.english == "borrow")
     }
 
     @MainActor
@@ -2759,6 +3195,275 @@ struct PETVocabularyTrainerTests {
         #expect(snapshot.scheduledLaterCount == 1)
         #expect(snapshot.headline.contains("due now"))
         #expect(snapshot.strategyText == ReviewScheduler.strategyDescription)
+    }
+
+    @Test func reviewRescuePlannerSplitsDueSoonAndBacklogWords() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 100_000)
+        let dueWord = VocabularyWord(id: "attitude", english: "attitude", primaryChinese: "态度", topic: .feelings)
+        let soonWord = VocabularyWord(id: "influence", english: "influence", primaryChinese: "影响", topic: .communication)
+        let backlogWord = VocabularyWord(id: "argument", english: "argument", primaryChinese: "争论", topic: .communication)
+        let dueProgress = WordProgress(
+            wordID: dueWord.id,
+            currentCorrectStreak: 0,
+            totalCorrect: 1,
+            totalIncorrect: 2,
+            retryMissCount: 1,
+            isMastered: false,
+            lastSeenAt: now.addingTimeInterval(-3_600),
+            lastIncorrectAt: now.addingTimeInterval(-3_600),
+            reviewPriority: 3,
+            reviewStep: 1,
+            nextReviewAt: now.addingTimeInterval(-60)
+        )
+        let soonProgress = WordProgress(
+            wordID: soonWord.id,
+            currentCorrectStreak: 1,
+            totalCorrect: 2,
+            totalIncorrect: 1,
+            isMastered: false,
+            lastSeenAt: now.addingTimeInterval(-3_600),
+            lastIncorrectAt: now.addingTimeInterval(-3_600),
+            reviewPriority: 1,
+            reviewStep: 2,
+            nextReviewAt: now.addingTimeInterval(3_600)
+        )
+        let backlogProgress = WordProgress(
+            wordID: backlogWord.id,
+            currentCorrectStreak: 1,
+            totalCorrect: 2,
+            totalIncorrect: 1,
+            isMastered: false,
+            lastSeenAt: now.addingTimeInterval(-3_600),
+            lastIncorrectAt: now.addingTimeInterval(-3_600),
+            reviewPriority: 1,
+            reviewStep: 3,
+            nextReviewAt: now.addingTimeInterval(3 * 24 * 60 * 60)
+        )
+
+        let snapshot = ReviewRescuePlanner.snapshot(
+            from: [
+                (word: backlogWord, progress: backlogProgress),
+                (word: dueWord, progress: dueProgress),
+                (word: soonWord, progress: soonProgress)
+            ],
+            memoryTipProvider: { wordID in wordID == dueWord.id ? "Attitude is how you stand toward something." : nil },
+            now: now
+        )
+
+        #expect(snapshot.dueNow.count == 1)
+        #expect(snapshot.comingSoon.count == 1)
+        #expect(snapshot.backlog.count == 1)
+        let dueSnapshot = try #require(snapshot.dueNow.words.first)
+        #expect(dueSnapshot.english == "attitude")
+        #expect(dueSnapshot.memoryTip == "Attitude is how you stand toward something.")
+        #expect(dueSnapshot.stageIndex == 1)
+        #expect(dueSnapshot.stageCount == 5)
+        #expect(dueSnapshot.weakPointText == "Spelling retry")
+        #expect(dueSnapshot.quickListenTitle == "Play word")
+        #expect(snapshot.primaryActionTitle == "START 1-WORD RESCUE")
+    }
+
+    @Test func reviewRescuePlannerTurnsLargeDueBacklogIntoFiveWordSprint() {
+        let now = Date(timeIntervalSinceReferenceDate: 200_000)
+        let items: [(word: VocabularyWord, progress: WordProgress)] = (0..<8).map { index in
+            let word = VocabularyWord(
+                id: "due-\(index)",
+                english: "word\(index)",
+                primaryChinese: "词\(index)",
+                topic: .school
+            )
+            let progress = WordProgress(
+                wordID: word.id,
+                currentCorrectStreak: 0,
+                totalCorrect: 1,
+                totalIncorrect: 2,
+                retryMissCount: index.isMultiple(of: 2) ? 1 : 0,
+                isMastered: false,
+                lastSeenAt: now.addingTimeInterval(-3_600),
+                lastIncorrectAt: now.addingTimeInterval(-3_600),
+                reviewPriority: 8 - index,
+                reviewStep: 0,
+                nextReviewAt: now.addingTimeInterval(-Double(index + 1) * 60)
+            )
+            return (word, progress)
+        }
+
+        let snapshot = ReviewRescuePlanner.snapshot(
+            from: items,
+            memoryTipProvider: { _ in nil },
+            now: now
+        )
+
+        #expect(snapshot.dueNow.count == 8)
+        #expect(snapshot.currentSprintCount == 5)
+        #expect(snapshot.waitingDueCount == 3)
+        #expect(snapshot.primaryActionTitle == "START 5-WORD RESCUE")
+        #expect(snapshot.rescuePackTitle == "5 words need rescue now")
+        #expect(snapshot.rescuePackDetail.contains("3 more"))
+        #expect(snapshot.rescuePackDetail.contains("safely waiting"))
+    }
+
+    @MainActor
+    @Test func appModelStartsOnlyFiveDueWordsForReviewRescue() {
+        let now = Date(timeIntervalSinceReferenceDate: 200_000)
+        let model = AppModel(store: Self.isolatedStore())
+        model.words = (0..<8).map { index in
+            VocabularyWord(
+                id: "due-\(index)",
+                english: "word\(index)",
+                primaryChinese: "词\(index)",
+                topic: .school
+            )
+        }
+        for (index, word) in model.words.enumerated() {
+            model.data.progressByWordID[word.id] = WordProgress(
+                wordID: word.id,
+                currentCorrectStreak: 0,
+                totalCorrect: 1,
+                totalIncorrect: 2,
+                isMastered: false,
+                lastSeenAt: now.addingTimeInterval(-3_600),
+                lastIncorrectAt: now.addingTimeInterval(-3_600),
+                reviewPriority: 8 - index,
+                reviewStep: 0,
+                nextReviewAt: now.addingTimeInterval(-Double(index + 1) * 60)
+            )
+        }
+
+        model.startFailedReview()
+
+        #expect(model.currentSession?.mode == .failedReview)
+        #expect(model.currentSession?.questions.count == 5)
+    }
+
+    @MainActor
+    @Test func appModelResumeTrimsLegacyFailedReviewSessionToFiveWordSprint() {
+        let model = AppModel(store: Self.isolatedStore())
+        model.words = (0..<10).map { index in
+            VocabularyWord(
+                id: "legacy-due-\(index)",
+                english: "word\(index)",
+                primaryChinese: "词\(index)",
+                topic: .school
+            )
+        }
+        model.data.activeSession = ActiveSession(
+            mode: .failedReview,
+            questions: model.words.map { word in
+                PersistedQuestion(wordID: word.id, choices: ["词0", "词1", "词2", "词3"], style: .wordExercise)
+            }
+        )
+
+        model.resumeCurrentSession()
+
+        #expect(model.screen == .quiz)
+        #expect(model.currentSession?.mode == .failedReview)
+        #expect(model.currentSession?.questions.count == ReviewRescuePlanner.rescueSprintSize)
+        #expect(model.quizProgressLabel == "WORD 1 / 5")
+    }
+
+    @Test func reviewNotificationPlannerBuildsDueNowDigest() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 100_000)
+        let snapshot = ReviewReminderSnapshot(
+            dueNowCount: 8,
+            scheduledLaterCount: 14,
+            retryTrackedCount: 3,
+            nextReminderAt: nil,
+            headline: "8 review reminders are due now",
+            detail: "Open Review Rescue first.",
+            strategyText: ReviewScheduler.strategyDescription
+        )
+
+        let plan = try #require(ReviewNotificationPlanner.plan(from: snapshot, now: now))
+
+        #expect(plan.identifier == ReviewNotificationPlan.identifier)
+        #expect(plan.title == "Review Rescue is ready")
+        #expect(plan.body.contains("8 PET words are due"))
+        #expect(Int(plan.fireDate.timeIntervalSince(now)) == 15 * 60)
+    }
+
+    @Test func reviewNotificationPlannerUsesNextFutureReminderWhenNothingIsDue() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 100_000)
+        let future = now.addingTimeInterval(3_600)
+        let snapshot = ReviewReminderSnapshot(
+            dueNowCount: 0,
+            scheduledLaterCount: 4,
+            retryTrackedCount: 1,
+            nextReminderAt: future,
+            headline: "Next reminder later",
+            detail: "Four words are coming back.",
+            strategyText: ReviewScheduler.strategyDescription
+        )
+
+        let plan = try #require(ReviewNotificationPlanner.plan(from: snapshot, now: now))
+
+        #expect(plan.fireDate == future)
+        #expect(plan.body.contains("4 PET words are coming back"))
+    }
+
+    @Test func legacyAppStoreDataLoadsWithReviewNotificationsDisabled() throws {
+        let data = try JSONDecoder().decode(AppStoreData.self, from: Data("{}".utf8))
+
+        #expect(data.reviewNotificationPreferences.isEnabled == false)
+        #expect(data.reviewNotificationPreferences.permissionDenied == false)
+        #expect(data.reviewNotificationPreferences.lastScheduledAt == nil)
+    }
+
+    @MainActor
+    @Test func appModelEnablingReviewNotificationsPersistsAndSchedulesDigest() async throws {
+        let store = Self.isolatedStore()
+        let scheduler = FakeReviewNotificationScheduler()
+        let model = AppModel(store: store, reviewNotificationScheduler: scheduler)
+        model.words = [
+            VocabularyWord(id: "attitude", english: "attitude", primaryChinese: "态度", topic: .feelings)
+        ]
+        model.data.progressByWordID["attitude"] = WordProgress(
+            wordID: "attitude",
+            currentCorrectStreak: 0,
+            totalCorrect: 0,
+            totalIncorrect: 1,
+            isMastered: false,
+            lastSeenAt: .now.addingTimeInterval(-3_600),
+            lastIncorrectAt: .now.addingTimeInterval(-3_600),
+            reviewPriority: 2,
+            reviewStep: 0,
+            nextReviewAt: .now.addingTimeInterval(-60)
+        )
+
+        await model.enableReviewNotifications()
+
+        #expect(model.data.reviewNotificationPreferences.isEnabled == true)
+        #expect(model.data.reviewNotificationPreferences.permissionDenied == false)
+        #expect(scheduler.requestedAuthorizationCount == 1)
+        let appliedPlan = try #require(scheduler.appliedPlans.compactMap { $0 }.last)
+        #expect(appliedPlan.body.contains("1 PET words are due"))
+        let savedData = try store.load()
+        #expect(savedData.reviewNotificationPreferences.isEnabled == true)
+        let savedScheduledAt = try #require(savedData.reviewNotificationPreferences.lastScheduledAt)
+        let modelScheduledAt = try #require(model.data.reviewNotificationPreferences.lastScheduledAt)
+        #expect(abs(savedScheduledAt.timeIntervalSince(modelScheduledAt)) < 1)
+    }
+
+    @MainActor
+    @Test func appModelDisablingReviewNotificationsPersistsAndCancelsDigest() async throws {
+        let store = Self.isolatedStore()
+        let scheduler = FakeReviewNotificationScheduler()
+        let model = AppModel(store: store, reviewNotificationScheduler: scheduler)
+        model.data.reviewNotificationPreferences = ReviewNotificationPreferences(
+            isEnabled: true,
+            permissionDenied: false,
+            lastScheduledAt: .now.addingTimeInterval(3_600)
+        )
+
+        await model.disableReviewNotifications()
+
+        #expect(model.data.reviewNotificationPreferences.isEnabled == false)
+        #expect(model.data.reviewNotificationPreferences.lastScheduledAt == nil)
+        #expect(scheduler.appliedPlans.count == 1)
+        #expect(scheduler.appliedPlans.last! == nil)
+        let savedData = try store.load()
+        #expect(savedData.reviewNotificationPreferences.isEnabled == false)
+        #expect(savedData.reviewNotificationPreferences.lastScheduledAt == nil)
     }
 
     @Test func localStoreRoundTripsIso8601Dates() throws {

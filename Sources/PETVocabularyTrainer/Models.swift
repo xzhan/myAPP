@@ -190,22 +190,33 @@ enum PronunciationRating: String, Codable, CaseIterable, Hashable {
     var displayTitle: String {
         switch self {
         case .needsPractice:
-            return "1 · Need more practice"
+            return "\(heartMeter) · Not heard clearly"
         case .almostThere:
-            return "2 · Almost there"
+            return "\(heartMeter) · Almost heard"
         case .clear:
-            return "3 · Clear and confident"
+            return "\(heartMeter) · Heard clearly"
         }
     }
 
     var feedbackLabel: String {
         switch self {
         case .needsPractice:
-            return "Need more practice"
+            return "Not heard clearly"
         case .almostThere:
-            return "Almost there"
+            return "Almost heard"
         case .clear:
-            return "Clear and confident"
+            return "Heard clearly"
+        }
+    }
+
+    var heartMeter: String {
+        switch self {
+        case .needsPractice:
+            return "🤍🤍❤️"
+        case .almostThere:
+            return "🤍❤️❤️"
+        case .clear:
+            return "❤️❤️❤️"
         }
     }
 
@@ -640,6 +651,33 @@ struct SessionSummary: Codable, Identifiable, Hashable {
     }
 }
 
+struct TrophiesSnapshot: Hashable {
+    let totalSessions: Int
+    let completedTodayCount: Int
+    let averageAccuracyPercent: Int
+    let dueReviewCount: Int
+    let dailyStreak: Int
+    let totalPages: Int
+    let questCompletedCount: Int
+    let readingCompletedCount: Int
+    let pageStatuses: [TrophiesPageStatusSnapshot]
+    let memoryWords: [ReviewRescueWordSnapshot]
+    let recentSessions: [SessionSummary]
+}
+
+struct TrophiesPageStatusSnapshot: Identifiable, Hashable {
+    let pageNumber: Int
+    let isCurrent: Bool
+    let isBaseReady: Bool
+    let isQuestEnhanced: Bool
+    let isQuestCompleted: Bool
+    let isReadingReady: Bool
+    let isReadingCompleted: Bool
+    let hasReviewDue: Bool
+
+    var id: Int { pageNumber }
+}
+
 struct QuestPage: Codable, Identifiable, Hashable {
     let pageNumber: Int
     let title: String
@@ -688,6 +726,8 @@ struct SessionReviewWordSnapshot: Codable, Identifiable, Hashable {
     let reviewStep: Int
     let retryMissCount: Int
     let memoryTip: String?
+    let exampleSentence: String?
+    let exampleTranslation: String?
 
     init(
         id: String = UUID().uuidString,
@@ -697,7 +737,9 @@ struct SessionReviewWordSnapshot: Codable, Identifiable, Hashable {
         nextReviewAt: Date?,
         reviewStep: Int,
         retryMissCount: Int = 0,
-        memoryTip: String? = nil
+        memoryTip: String? = nil,
+        exampleSentence: String? = nil,
+        exampleTranslation: String? = nil
     ) {
         self.id = id
         self.english = english
@@ -707,6 +749,8 @@ struct SessionReviewWordSnapshot: Codable, Identifiable, Hashable {
         self.reviewStep = reviewStep
         self.retryMissCount = retryMissCount
         self.memoryTip = memoryTip
+        self.exampleSentence = exampleSentence
+        self.exampleTranslation = exampleTranslation
     }
 
     enum CodingKeys: String, CodingKey {
@@ -718,6 +762,8 @@ struct SessionReviewWordSnapshot: Codable, Identifiable, Hashable {
         case reviewStep
         case retryMissCount
         case memoryTip
+        case exampleSentence
+        case exampleTranslation
     }
 
     init(from decoder: Decoder) throws {
@@ -730,6 +776,8 @@ struct SessionReviewWordSnapshot: Codable, Identifiable, Hashable {
         reviewStep = try container.decodeIfPresent(Int.self, forKey: .reviewStep) ?? 0
         retryMissCount = try container.decodeIfPresent(Int.self, forKey: .retryMissCount) ?? 0
         memoryTip = try container.decodeIfPresent(String.self, forKey: .memoryTip)
+        exampleSentence = try container.decodeIfPresent(String.self, forKey: .exampleSentence)
+        exampleTranslation = try container.decodeIfPresent(String.self, forKey: .exampleTranslation)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -742,6 +790,8 @@ struct SessionReviewWordSnapshot: Codable, Identifiable, Hashable {
         try container.encode(reviewStep, forKey: .reviewStep)
         try container.encode(retryMissCount, forKey: .retryMissCount)
         try container.encodeIfPresent(memoryTip, forKey: .memoryTip)
+        try container.encodeIfPresent(exampleSentence, forKey: .exampleSentence)
+        try container.encodeIfPresent(exampleTranslation, forKey: .exampleTranslation)
     }
 }
 
@@ -780,6 +830,12 @@ struct ReadingQuest: Codable, Identifiable, Hashable {
     var isQuizReady: Bool { !questions.isEmpty && questions.allSatisfy(\.isQuizReady) }
 }
 
+struct ReviewNotificationPreferences: Codable, Hashable {
+    var isEnabled: Bool = false
+    var permissionDenied: Bool = false
+    var lastScheduledAt: Date? = nil
+}
+
 enum ActiveWordBankMode: String, Codable, Hashable {
     case bundled
     case imported
@@ -801,6 +857,7 @@ struct AppStoreData: Codable, Hashable {
     var completedReadingQuestPages: [Int] = []
     var readingLibrary: ReadingLibraryMetadata?
     var readingQuests: [ReadingQuest] = []
+    var reviewNotificationPreferences = ReviewNotificationPreferences()
 
     enum CodingKeys: String, CodingKey {
         case activeWordBankMode
@@ -818,6 +875,7 @@ struct AppStoreData: Codable, Hashable {
         case completedReadingQuestPages
         case readingLibrary
         case readingQuests
+        case reviewNotificationPreferences
     }
 
     init() {}
@@ -839,6 +897,7 @@ struct AppStoreData: Codable, Hashable {
         completedReadingQuestPages = try container.decodeIfPresent([Int].self, forKey: .completedReadingQuestPages) ?? []
         readingLibrary = try container.decodeIfPresent(ReadingLibraryMetadata.self, forKey: .readingLibrary)
         readingQuests = try container.decodeIfPresent([ReadingQuest].self, forKey: .readingQuests) ?? []
+        reviewNotificationPreferences = try container.decodeIfPresent(ReviewNotificationPreferences.self, forKey: .reviewNotificationPreferences) ?? ReviewNotificationPreferences()
     }
 
     func encode(to encoder: Encoder) throws {
@@ -858,6 +917,7 @@ struct AppStoreData: Codable, Hashable {
         try container.encode(completedReadingQuestPages, forKey: .completedReadingQuestPages)
         try container.encodeIfPresent(readingLibrary, forKey: .readingLibrary)
         try container.encode(readingQuests, forKey: .readingQuests)
+        try container.encode(reviewNotificationPreferences, forKey: .reviewNotificationPreferences)
     }
 }
 

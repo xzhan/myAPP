@@ -35,6 +35,7 @@ final class AppModel {
     private let presentImportPanel: ImportPanelPresenter
     private let presentReadingImportPanel: ReadingImportPanelPresenter
     private let speakText: SpeechPlayer
+    private let reviewNotificationScheduler: any ReviewNotificationScheduling
     private var autoAdvanceTask: Task<Void, Never>?
 
     var words: [VocabularyWord] = []
@@ -61,6 +62,7 @@ final class AppModel {
         presentImportPanel: @escaping ImportPanelPresenter = AppModel.defaultImportPanelPresenter,
         presentReadingImportPanel: @escaping ReadingImportPanelPresenter = AppModel.defaultReadingImportPanelPresenter,
         speakText: @escaping SpeechPlayer = SpeechCoach.shared.speak,
+        reviewNotificationScheduler: any ReviewNotificationScheduling = SystemReviewNotificationScheduler(),
         sleepForNanoseconds: @escaping @Sendable (UInt64) async -> Void = { nanoseconds in
             try? await Task.sleep(nanoseconds: nanoseconds)
         }
@@ -70,6 +72,7 @@ final class AppModel {
         self.presentImportPanel = presentImportPanel
         self.presentReadingImportPanel = presentReadingImportPanel
         self.speakText = speakText
+        self.reviewNotificationScheduler = reviewNotificationScheduler
         self.sleepForNanoseconds = sleepForNanoseconds
     }
 
@@ -313,6 +316,35 @@ final class AppModel {
             return "RESUME SESSION"
         }
         return "RESUME \(session.mode.title.uppercased())"
+    }
+
+    var shouldNudgeReviewRescueOnCurrentQuest: Bool {
+        guard let pageNumber = currentQuestPage?.pageNumber,
+              !isQuestPageCompleted(pageNumber),
+              reviewRescueSnapshot.currentSprintCount > 0 else {
+            return false
+        }
+        return true
+    }
+
+    var shouldResumeHomeQuestSession: Bool {
+        guard let session = currentSession,
+              session.mode != .placement else {
+            return false
+        }
+        return true
+    }
+
+    var homeQuestActionTitle: String {
+        shouldResumeHomeQuestSession ? resumeSessionTitle : currentUnitSnapshot.primaryActionTitle
+    }
+
+    func performHomeQuestAction() {
+        if shouldResumeHomeQuestSession {
+            resumeCurrentSession()
+        } else {
+            performCurrentUnitPrimaryAction()
+        }
     }
 
     var currentUnitResumeSessionTitle: String? {
@@ -901,9 +933,98 @@ final class AppModel {
         )
     }
 
+    var reviewRescueSnapshot: ReviewRescueSnapshot {
+        ReviewRescuePlanner.snapshot(
+            from: reviewWords,
+            memoryTipProvider: { [self] wordID in
+                memoryTip(forWordID: wordID)
+            },
+            contextProvider: { [self] wordID in
+                reviewLearningContext(forWordID: wordID)
+            }
+        )
+    }
+
+    var trophiesSnapshot: TrophiesSnapshot {
+        let sessions = sessionHistory
+        let completedTodayCount = sessions.filter { Calendar.current.isDateInToday($0.completedAt) }.count
+        let averageAccuracy = sessions.isEmpty
+            ? 0
+            : Int((Double(sessions.map(\.accuracyPercent).reduce(0, +)) / Double(sessions.count)).rounded())
+        let rescueSnapshot = reviewRescueSnapshot
+        let pageStatuses = trophiesPageStatuses
+
+        return TrophiesSnapshot(
+            totalSessions: sessions.count,
+            completedTodayCount: completedTodayCount,
+            averageAccuracyPercent: averageAccuracy,
+            dueReviewCount: rescueSnapshot.dueNow.count,
+            dailyStreak: data.dailyStreak,
+            totalPages: pageStatuses.count,
+            questCompletedCount: data.completedQuestPages.count,
+            readingCompletedCount: data.completedReadingQuestPages.count,
+            pageStatuses: pageStatuses,
+            memoryWords: Array(rescueSnapshot.dueNow.words.prefix(8)),
+            recentSessions: Array(sessions.prefix(8))
+        )
+    }
+
+    private var trophiesPageStatuses: [TrophiesPageStatusSnapshot] {
+        let basePageNumbers = Set(data.wordPages.map(\.pageNumber))
+        let questPageNumbers = Set(data.questPages.map(\.pageNumber))
+        let readingPageNumbers = Set(data.readingQuests.compactMap(\.pageNumber))
+        let questCompletedPageNumbers = Set(data.completedQuestPages)
+        let readingCompletedPageNumbers = Set(data.completedReadingQuestPages)
+        let duePageNumbers = dueReviewPageNumbers
+
+        var allPageNumbers = basePageNumbers
+            .union(questPageNumbers)
+            .union(readingPageNumbers)
+            .union(questCompletedPageNumbers)
+            .union(readingCompletedPageNumbers)
+            .union(duePageNumbers)
+
+        if let currentPageNumber = currentQuestPage?.pageNumber {
+            allPageNumbers.insert(currentPageNumber)
+        }
+
+        let highestPageNumber = max(66, allPageNumbers.max() ?? 0)
+        return (1...highestPageNumber).map { pageNumber in
+            TrophiesPageStatusSnapshot(
+                pageNumber: pageNumber,
+                isCurrent: currentQuestPage?.pageNumber == pageNumber,
+                isBaseReady: basePageNumbers.contains(pageNumber),
+                isQuestEnhanced: questPageNumbers.contains(pageNumber),
+                isQuestCompleted: questCompletedPageNumbers.contains(pageNumber),
+                isReadingReady: readingPageNumbers.contains(pageNumber),
+                isReadingCompleted: readingCompletedPageNumbers.contains(pageNumber),
+                hasReviewDue: duePageNumbers.contains(pageNumber)
+            )
+        }
+    }
+
+    private var dueReviewPageNumbers: Set<Int> {
+        let dueWordIDs = Set(dueReviewWords.map(\.word.id))
+        guard !dueWordIDs.isEmpty else { return [] }
+
+        var pageNumbers = Set<Int>()
+        for page in data.questPages {
+            for question in page.questions where dueWordIDs.contains(question.wordID) {
+                pageNumbers.insert(question.sourcePageNumber ?? page.pageNumber)
+            }
+        }
+
+        for page in data.wordPages where !dueWordIDs.isDisjoint(with: page.wordIDs) {
+            pageNumbers.insert(page.pageNumber)
+        }
+
+        return pageNumbers
+    }
+
     var homeMissionSnapshot: HomeMissionSnapshot {
         let unitSnapshot = currentUnitSnapshot
         let reminderSnapshot = reviewReminderSnapshot
+        let rescueSprintCount = reviewRescueSnapshot.currentSprintCount
         let currentPageLabel: String
         let currentPageCaption: String
         let todayDetail: String
@@ -926,9 +1047,13 @@ final class AppModel {
             questDetail = "Take the benchmark first, then daily page practice can begin."
         case .ready:
             questStatusText = currentQuestPage?.isQuestEnhanced == true ? "MAIN TASK" : "BASE TASK"
-            questDetail = currentQuestPage?.isQuestEnhanced == true
+            let baseQuestDetail = currentQuestPage?.isQuestEnhanced == true
                 ? "Meaning, spelling retry, translation, pronunciation, and memory tip."
                 : "Use the stable PET page words now; Quest JSON can enrich this same page later."
+            let reminderNudge = shouldNudgeReviewRescueOnCurrentQuest
+                ? " Step 4 has \(rescueSprintCount) due review words ready when the learner wants a quick rescue sprint."
+                : ""
+            questDetail = baseQuestDetail + reminderNudge
         case .completed:
             questStatusText = "DONE"
             questDetail = "The word quest for this page is complete. Continue into the matching Reading step."
@@ -1543,14 +1668,17 @@ final class AppModel {
 
     var reviewWordSnapshots: [SessionReviewWordSnapshot] {
         reviewWords.map { item in
-            SessionReviewWordSnapshot(
+            let context = reviewLearningContext(forWordID: item.word.id)
+            return SessionReviewWordSnapshot(
                 english: item.word.english,
                 primaryChinese: item.word.primaryChinese,
                 topic: item.word.topic,
                 nextReviewAt: item.progress.nextReviewAt,
                 reviewStep: item.progress.reviewStep,
                 retryMissCount: item.progress.retryMissCount,
-                memoryTip: memoryTip(forWordID: item.word.id)
+                memoryTip: memoryTip(forWordID: item.word.id),
+                exampleSentence: context?.exampleSentence,
+                exampleTranslation: context?.exampleTranslation
             )
         }
     }
@@ -1651,6 +1779,24 @@ final class AppModel {
         screen = .review
     }
 
+    func enableReviewNotifications() async {
+        let isAllowed = await reviewNotificationScheduler.requestAuthorization()
+        data.reviewNotificationPreferences.isEnabled = isAllowed
+        data.reviewNotificationPreferences.permissionDenied = !isAllowed
+        let plan = isAllowed ? ReviewNotificationPlanner.plan(from: reviewReminderSnapshot) : nil
+        data.reviewNotificationPreferences.lastScheduledAt = plan?.fireDate
+        try? persist()
+        await reviewNotificationScheduler.apply(plan: plan)
+    }
+
+    func disableReviewNotifications() async {
+        data.reviewNotificationPreferences.isEnabled = false
+        data.reviewNotificationPreferences.permissionDenied = false
+        data.reviewNotificationPreferences.lastScheduledAt = nil
+        try? persist()
+        await reviewNotificationScheduler.apply(plan: nil)
+    }
+
     func openTrophies() {
         cancelAutoAdvance()
         activeReadingSession = nil
@@ -1722,7 +1868,9 @@ final class AppModel {
     func resumeCurrentSession() {
         guard data.activeSession != nil else { return }
         cancelAutoAdvance()
-        normalizeLegacyActiveSessionIfNeeded()
+        if normalizeLegacyActiveSessionIfNeeded() {
+            try? persist()
+        }
         answerFeedback = nil
         screen = .quiz
     }
@@ -1910,7 +2058,7 @@ final class AppModel {
     }
 
     func startFailedReview() {
-        let questions = SessionPlanner.failedReviewQuestions(words: words, data: data, count: 10)
+        let questions = SessionPlanner.failedReviewQuestions(words: words, data: data, count: ReviewRescuePlanner.rescueSprintSize)
         startSession(mode: .failedReview, questions: questions)
     }
 
@@ -2193,7 +2341,10 @@ final class AppModel {
 
         let meaningChoice = session.pendingMeaningChoice ?? ""
         let meaningWasCorrect = session.pendingMeaningWasCorrect ?? false
-        let isSpellingMatch = normalizeWordAnswer(spellingAnswer) == normalizeWordAnswer(correctSpellingAnswer(for: question, word: word))
+        let isSpellingMatch = spellingAnswerMatches(
+            spellingAnswer,
+            correctAnswer: correctSpellingAnswer(for: question, word: word)
+        )
         session.pendingSpellingAnswer = spellingAnswer
 
         if !isSpellingMatch {
@@ -2206,6 +2357,7 @@ final class AppModel {
                 quizStepID = UUID()
             }
             try? persist()
+            rescheduleReviewNotificationIfEnabled()
             return
         }
 
@@ -2291,6 +2443,7 @@ final class AppModel {
             quizStepID = UUID()
         }
         try? persist()
+        rescheduleReviewNotificationIfEnabled()
     }
 
     func advanceAfterFeedback(triggeredAutomatically: Bool = false) {
@@ -2357,23 +2510,46 @@ final class AppModel {
         try? persist()
     }
 
-    private func normalizeLegacyActiveSessionIfNeeded() {
-        guard var session = data.activeSession,
-              session.currentExerciseStep == .pronunciation,
-              session.pendingMeaningChoice == nil
+    @discardableResult
+    private func normalizeLegacyActiveSessionIfNeeded() -> Bool {
+        guard var session = data.activeSession else {
+            return false
+        }
+
+        var didNormalize = false
+
+        if session.mode == .failedReview,
+           session.questions.count > ReviewRescuePlanner.rescueSprintSize {
+            session.questions = Array(session.questions.prefix(ReviewRescuePlanner.rescueSprintSize))
+            session.currentIndex = min(session.currentIndex, session.questions.count - 1)
+
+            let retainedWordIDs = Set(session.questions.map(\.wordID))
+            session.attempts = session.attempts.filter { retainedWordIDs.contains($0.wordID) }
+            session.correctAnswers = session.attempts.filter(\.isCorrect).count
+            session.newlyMasteredWordIDs = session.newlyMasteredWordIDs.filter { retainedWordIDs.contains($0) }
+            didNormalize = true
+        }
+
+        let needsPronunciationStepRollback = session.currentExerciseStep == .pronunciation
+            && (session.pendingMeaningChoice == nil
                 || session.pendingSpellingAnswer != nil
                 || session.pendingSpellingWasCorrect != nil
                 || session.pendingTranslationChoice != nil
-                || session.pendingTranslationWasCorrect != nil else {
-            return
+                || session.pendingTranslationWasCorrect != nil)
+
+        if needsPronunciationStepRollback {
+            session.currentExerciseStep = .spelling
+            session.pendingSpellingWasCorrect = false
+            session.pendingPronunciationRating = nil
+            session.pendingTranslationChoice = nil
+            session.pendingTranslationWasCorrect = nil
+            didNormalize = true
         }
 
-        session.currentExerciseStep = .spelling
-        session.pendingSpellingWasCorrect = false
-        session.pendingPronunciationRating = nil
-        session.pendingTranslationChoice = nil
-        session.pendingTranslationWasCorrect = nil
-        data.activeSession = session
+        if didNormalize {
+            data.activeSession = session
+        }
+        return didNormalize
     }
 
     private func finish(session: ActiveSession) {
@@ -2420,6 +2596,7 @@ final class AppModel {
            let questPageNumber = session.questPageNumber,
            let readingQuest = readingQuest(forPageNumber: questPageNumber) {
             try? persist()
+            rescheduleReviewNotificationIfEnabled()
             if readingQuest.isQuizReady {
                 startReadingQuest(forPageNumber: questPageNumber)
             } else {
@@ -2430,6 +2607,7 @@ final class AppModel {
 
         screen = .summary
         try? persist()
+        rescheduleReviewNotificationIfEnabled()
     }
 
     private func finishReadingSession(_ session: ActiveReadingSession) {
@@ -2526,6 +2704,8 @@ final class AppModel {
             }
 
             let progress = data.progressByWordID[attempt.wordID] ?? .fresh(for: attempt.wordID)
+            let question = session.questions.first(where: { $0.wordID == attempt.wordID })
+            let context = reviewLearningContext(from: question) ?? reviewLearningContext(forWordID: attempt.wordID)
             return SessionReviewWordSnapshot(
                 english: word.english,
                 primaryChinese: word.primaryChinese,
@@ -2533,7 +2713,9 @@ final class AppModel {
                 nextReviewAt: progress.nextReviewAt,
                 reviewStep: progress.reviewStep,
                 retryMissCount: progress.retryMissCount,
-                memoryTip: session.questions.first(where: { $0.wordID == attempt.wordID })?.memoryTip ?? memoryTip(forWordID: attempt.wordID)
+                memoryTip: question?.memoryTip ?? memoryTip(forWordID: attempt.wordID),
+                exampleSentence: context?.exampleSentence,
+                exampleTranslation: context?.exampleTranslation
             )
         }
     }
@@ -2775,6 +2957,42 @@ final class AppModel {
         return nil
     }
 
+    private func reviewLearningContext(forWordID wordID: String) -> ReviewRescueWordContext? {
+        if let sessionQuestion = data.activeSession?.questions.first(where: { $0.wordID == wordID }),
+           let context = reviewLearningContext(from: sessionQuestion) {
+            return context
+        }
+
+        for page in data.questPages {
+            if let question = page.questions.first(where: { $0.wordID == wordID }),
+               let context = reviewLearningContext(from: question) {
+                return context
+            }
+        }
+
+        return nil
+    }
+
+    private func reviewLearningContext(from question: PersistedQuestion?) -> ReviewRescueWordContext? {
+        guard let question else { return nil }
+        let exampleSentence = cleanedReviewText(question.exampleSentence)
+        let exampleTranslation = cleanedReviewText(question.exampleTranslation)
+
+        guard exampleSentence != nil || exampleTranslation != nil else {
+            return nil
+        }
+
+        return ReviewRescueWordContext(
+            exampleSentence: exampleSentence,
+            exampleTranslation: exampleTranslation
+        )
+    }
+
+    private func cleanedReviewText(_ text: String?) -> String? {
+        let cleaned = text?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned?.isEmpty == false ? cleaned : nil
+    }
+
     private func makeAnswerFeedback(
         selectedChoice: String,
         correctChoice: String,
@@ -2967,6 +3185,18 @@ final class AppModel {
         try store.save(data)
     }
 
+    private func rescheduleReviewNotificationIfEnabled() {
+        guard data.reviewNotificationPreferences.isEnabled else { return }
+
+        let plan = ReviewNotificationPlanner.plan(from: reviewReminderSnapshot)
+        data.reviewNotificationPreferences.lastScheduledAt = plan?.fireDate
+        try? store.save(data)
+
+        Task { @MainActor [reviewNotificationScheduler] in
+            await reviewNotificationScheduler.apply(plan: plan)
+        }
+    }
+
     private func createSafetyBackup(reason: String) -> Bool {
         do {
             _ = try store.backupExistingData(reason: reason)
@@ -3034,6 +3264,67 @@ final class AppModel {
         value
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+    }
+
+    private func spellingAnswerMatches(_ answer: String, correctAnswer: String) -> Bool {
+        let normalizedAnswer = normalizeWordAnswer(answer)
+        return acceptedSpellingAnswers(for: correctAnswer).contains(normalizedAnswer)
+    }
+
+    private func acceptedSpellingAnswers(for correctAnswer: String) -> Set<String> {
+        let answerParts = correctAnswer.components(separatedBy: CharacterSet(charactersIn: "/,;|"))
+        return answerParts.reduce(into: Set<String>()) { acceptedAnswers, rawPart in
+            acceptedAnswers.insertNormalized(rawPart, using: normalizeWordAnswer)
+
+            for expandedAnswer in expandOptionalParentheticalLetters(in: rawPart) {
+                acceptedAnswers.insertNormalized(expandedAnswer, using: normalizeWordAnswer)
+            }
+        }
+    }
+
+    private func expandOptionalParentheticalLetters(in value: String) -> [String] {
+        var variants = [""]
+        var index = value.startIndex
+
+        while index < value.endIndex {
+            if value[index] == "(",
+               let closingIndex = value[index...].firstIndex(of: ")") {
+                let optionalLetters = String(value[value.index(after: index)..<closingIndex])
+                if isAttachedOptionalLetterGroup(optionalLetters, in: value, openingIndex: index) {
+                    let withOptionalLetters = variants.map { $0 + optionalLetters }
+                    variants.append(contentsOf: withOptionalLetters)
+                    index = value.index(after: closingIndex)
+                    continue
+                }
+            }
+
+            let character = String(value[index])
+            variants = variants.map { $0 + character }
+            index = value.index(after: index)
+        }
+
+        return variants
+    }
+
+    private func isAttachedOptionalLetterGroup(_ value: String, in original: String, openingIndex: String.Index) -> Bool {
+        guard !value.isEmpty,
+              value.count <= 8,
+              value.rangeOfCharacter(from: CharacterSet.letters.inverted) == nil,
+              openingIndex > original.startIndex else {
+            return false
+        }
+
+        let previousCharacter = original[original.index(before: openingIndex)]
+        return !previousCharacter.isWhitespace
+    }
+}
+
+private extension Set where Element == String {
+    mutating func insertNormalized(_ value: String, using normalizer: (String) -> String) {
+        let normalizedValue = normalizer(value)
+        if !normalizedValue.isEmpty {
+            insert(normalizedValue)
+        }
     }
 }
 

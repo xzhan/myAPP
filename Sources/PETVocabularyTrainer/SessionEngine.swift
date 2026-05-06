@@ -375,6 +375,21 @@ enum FeedbackGenerator {
             )
         }
 
+        if session.mode == .failedReview {
+            let totalQuestions = max(session.questions.count, 1)
+            let rescuedCount = session.correctAnswers
+            let waitingText = incorrectAttempts.isEmpty
+                ? "Every word in this sprint is warmer now."
+                : "\(incorrectAttempts.count) word\(incorrectAttempts.count == 1 ? "" : "s") will return on the memory curve."
+
+            return FeedbackSummary(
+                headline: "Rescue sprint cleared",
+                body: "You rescued \(rescuedCount) of \(totalQuestions) words. That small win keeps the backlog friendly instead of boring. \(waitingText)",
+                weakTopics: Array(weakTopics.prefix(2)),
+                recommendedMissionTitle: "Choose next rescue step"
+            )
+        }
+
         let masteredCount = session.newlyMasteredWordIDs.count
         let wordLabel = masteredCount == 1 ? "word" : "words"
         let headline: String

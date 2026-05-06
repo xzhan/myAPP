@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>PETVocabularyTrainer</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.xzhan.PETVocabularyTrainer</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>PETVocabularyTrainer</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>PET Vocabulary Trainer listens briefly so the cat coach can check pronunciation practice.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>PET Vocabulary Trainer uses speech recognition to compare spoken PET words with the target word.</string>
+</dict>
+</plist>
